@@ -290,3 +290,92 @@
   margin-bottom: 20px;
   color: #333;
 }
+
+/* Session Control Styles */
+.session-control {
+  background: #fff;
+  border-radius: 10px;
+  padding: 30px;
+  margin-top: 30px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  text-align: center;
+}
+
+/* Camera Feed Styles */
+.camera-feed-section {
+  background: #fff;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.camera-container {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+}
+
+.camera-placeholder {
+  width: 100%;
+  max-width: 600px;
+  height: 400px;
+  background-color: #000;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.camera-placeholder p {
+  color: #666;
+  font-size: 16px;
+  text-align: center;
+}
+
+.session-control h3 {
+  margin-bottom: 20px;
+  color: #333;
+  font-size: 24px;
+}
+
+.session-button {
+  padding: 20px 60px;
+  font-size: 18px;
+  font-weight: 600;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 200px;
+}
+
+.session-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.session-button:active {
+  transform: translateY(0);
+}
+
+/* Green for Start Session */
+.session-button:not(.stop-session) {
+  background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+  color: white;
+}
+
+.session-button:not(.stop-session):hover {
+  background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
+}
+
+/* Red for Stop Session */
+.session-button.stop-session {
+  background: linear-gradient(135deg, #f44336 0%, #da190b 100%);
+  color: white;
+}
+
+.session-button.stop-session:hover {
+  background: linear-gradient(135deg, #da190b 0%, #c41c00 100%);
+}

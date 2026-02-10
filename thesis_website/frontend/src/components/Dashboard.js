@@ -1,7 +1,6 @@
 // frontend/src/components/Dashboard.js
 import React, { useState, useEffect } from 'react';
 import './Dashboard.css';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
 function Dashboard({ user, onLogout }) {
   const [sensorStates, setSensorStates] = useState({
@@ -10,7 +9,6 @@ function Dashboard({ user, onLogout }) {
     large: { status: 'Inactive', detecting: false }
   });
   const [detectedSize, setDetectedSize] = useState('N/A');
-  const [connectionStatus, setConnectionStatus] = useState('Disconnected');
   const [sortingStats, setSortingStats] = useState({
     small: 0,
     medium: 0,
@@ -18,8 +16,7 @@ function Dashboard({ user, onLogout }) {
     total: 0
   });
   const [sortingHistory, setSortingHistory] = useState([]);
-  
-
+  const [sessionActive, setSessionActive] = useState(false);
 
   useEffect(() => {
     // Create WebSocket connection
@@ -27,7 +24,6 @@ function Dashboard({ user, onLogout }) {
     
     ws.onopen = () => {
       console.log('Connected to ESP32');
-      setConnectionStatus('Connected');
       setSensorStates(prev => ({
         small: { ...prev.small, status: 'Active' },
         medium: { ...prev.medium, status: 'Active' },
@@ -116,22 +112,21 @@ function Dashboard({ user, onLogout }) {
       <header className="dashboard-header">
         <div className="header-content">
           <h1>Automated Carabao Mango Sorting System</h1>
-          <div className="user-section">
-            <span className="user-name">Welcome, {user.name}!</span>
-            <button className="logout-button" onClick={onLogout}>
-              Logout
-            </button>
-          </div>
+            <div className="user-section">
+              <button className="logout-button" onClick={onLogout}>
+                Logout
+              </button>
+            </div>
         </div>
       </header>
 
       <main className="dashboard-main">
-        <div className="welcome-card">
-          <h2>Welcome to the Dashboard</h2>
-          <p>You are successfully logged in to the Automated Carabao Mango Sorting System.</p>
-          <div className="user-info">
-            <p><strong>Name:</strong> {user.name}</p>
-            <p><strong>Email:</strong> {user.email}</p>
+        <div className="welcome-card camera-feed-section">
+          <h2>Live Camera Feed</h2>
+          <div className="camera-container">
+            <div className="camera-placeholder">
+              <p>Camera stream will appear here</p>
+            </div>
           </div>
         </div>
       </main>
@@ -192,16 +187,11 @@ function Dashboard({ user, onLogout }) {
           </div>
         </div>
 
-        <div className="sorting-chart">
-          <h3>Sorting Distribution</h3>
-          <LineChart width={600} height={300} data={sortingHistory.slice(-20)}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="timestamp" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            <Line type="monotone" dataKey="size" stroke="#8884d8" />
-          </LineChart>
+        <div className="session-control">
+          <h3>Sorting Session</h3>
+          <button className={`session-button ${sessionActive ? 'stop-session' : ''}`} onClick={() => setSessionActive(!sessionActive)}>
+            {sessionActive ? 'Stop Session' : 'Start Session'}
+          </button>
         </div>
       </section>
     </div>

@@ -12,36 +12,36 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const verifyToken = async () => {
+      try {
+        const response = await fetch('http://localhost:5000/api/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (response.ok) {
+          const userData = await response.json();
+          setUser(userData);
+        } else {
+          localStorage.removeItem('token');
+          setToken(null);
+        }
+      } catch (err) {
+        console.error('Error verifying token:', err);
+        localStorage.removeItem('token');
+        setToken(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     if (token) {
       verifyToken();
     } else {
       setLoading(false);
     }
   }, [token]);
-
-  const verifyToken = async () => {
-    try {
-      const response = await fetch('http://localhost:5000/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
-      } else {
-        localStorage.removeItem('token');
-        setToken(null);
-      }
-    } catch (err) {
-      console.error('Error verifying token:', err);
-      localStorage.removeItem('token');
-      setToken(null);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleLogin = (loginToken, userData) => {
     localStorage.setItem('token', loginToken);
