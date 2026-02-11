@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import './AuthStyles.css';
 
 function LoginPage({ onLogin, onSwitchToSignup }) {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -13,16 +13,20 @@ function LoginPage({ onLogin, onSwitchToSignup }) {
     setError('');
     setLoading(true);
 
+    console.log('Attempting login with:', { username, password: '***' });
+
     try {
       const response = await fetch('http://localhost:5000/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ username, password }),
       });
 
       const data = await response.json();
+      console.log('Response status:', response.status);
+      console.log('Response data:', data);
 
       if (response.ok) {
         onLogin(data.token, data.user);
@@ -46,13 +50,13 @@ function LoginPage({ onLogin, onSwitchToSignup }) {
         
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="username">Username</label>
             <input
-              id="email"
-              type="email"
-              placeholder="Enter your email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              id="username"
+              type="text"
+              placeholder="Enter your username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               required
               disabled={loading}
             />
