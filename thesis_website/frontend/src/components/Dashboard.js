@@ -235,9 +235,15 @@ function Dashboard({ user, onLogout }) {
             </div>
           </div>
 
-          <div className="size-card" style={{ marginTop: 10, backgroundColor: isDefective ? '#ffebee' : '#fff', borderColor: isDefective ? '#d32f2f' : '#ddd' }}>
-            <h3>Detected Mango Size</h3>
-            <div className="size-display" style={{ color: isDefective ? '#d32f2f' : '#FDB813' }}>{detectedSize}</div>
+          <div className="size-card" style={{ marginTop: 10, backgroundColor: isDefective ? '#ffebee' : '#fff', borderColor: isDefective ? '#d32f2f' : '#ddd', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '150px' }}>
+            {isDefective ? (
+              <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#d32f2f' }}>DEFECTIVE</div>
+            ) : (
+              <>
+                <h3 style={{ margin: '0 0 15px 0' }}>Detected Mango Size</h3>
+                <div className="size-display">{detectedSize}</div>
+              </>
+            )}
           </div>
         </div>
 
