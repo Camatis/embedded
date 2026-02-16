@@ -109,25 +109,34 @@
 .sensor-card {
   background-color: #f9f9f9;
   border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 20px;
+  border-radius: 10px;
+  padding: 10px;
   margin: 10px;
   flex: 1;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.sensor-card h3 {
+  margin: 0 0 30px 0;
+}
+
+.sensor-card p {
+  margin: 0;
 }
 
 .sensor-card.small {
-  width: 30%;
+  width: 100%;
   border-left: 4px solid #FDB813;
 }
 
 .sensor-card.medium {
-  width: 30%;
+  width: 100%;
   border-left: 4px solid #FDB813;
 }
 
 .sensor-card.large {
-  width: 30%;
+  width: 100%;
   border-left: 4px solid #FDB813;
 }
 
@@ -336,22 +345,22 @@
 /* Grid layout for dashboard */
 .parent {
   display: grid;
-  grid-template-columns: 1fr 520px 420px;
-  grid-template-rows: 125px repeat(1fr) 100px;
+  grid-template-columns: 1fr 520px 1fr;
+  grid-template-rows: 125px repeat(auto-fit, 1fr) 100px;
   gap: 23px;
   max-width: 1500px;
 }
 
-.div1 { grid-column: span 3 / span 3; grid-row: span 1 / span 1; }
-.div2 { grid-column: span 2 / span 4; grid-row: span 3 / span 3; grid-row-start: 2; display:flex; flex-direction:column; gap:10px; }
-.div3 { grid-column-start: 3 / 4; grid-row-start: 2; }
-.div4 { grid-column-start: 2 / 4; grid-row-start: 3; }
-.div5 { grid-column-start: 2 / 4; grid-row-start: 4; }
-.div6 { grid-row-start: 5; }
-.div7 { grid-row-start: 5; }
-.div8 { grid-row-start: 5; }
-.div9 { grid-column-start: 2; grid-row-start: 6; }
-.div10 { grid-column: span 3 / span 3; grid-row-start: 7; }
+.div1 { grid-column: 1 / -1; grid-row: 1; }
+.div2 { grid-column: 1 / 3; grid-row: 2 / 5; display: flex; flex-direction: column; gap: 10px; }
+.div3 { grid-column: 3; grid-row: 2; }
+.div4 { grid-column: 3; grid-row: 3; }
+.div5 { grid-column: 3; grid-row: 4; }
+.div6 { grid-column: 1; grid-row: 5; }
+.div7 { grid-column: 2; grid-row: 5; }
+.div8 { grid-column: 3; grid-row: 5; }
+.div9 { grid-column: 1 / -1; grid-row: 6; }
+.div10 { grid-column: 1 / -1; grid-row: 7; }
 
 /* Camera and toggle */
 .camera-feed-section { width: 100%; }
@@ -386,6 +395,13 @@
 .history-table { width: 100%; border-collapse: collapse; }
 .history-table th, .history-table td { padding: 10px; border-bottom: 1px solid #eee; text-align:left; }
 .history-table th { background:#fafafa; }
+
+.history-table-container {
+  max-height: 255px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
 
 .session-control h3 {
   margin-bottom: 20px;

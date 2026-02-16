@@ -235,6 +235,16 @@ app.delete('/api/sessions/:id', async (req, res) => {
   }
 });
 
+// DELETE: Clear all sessions
+app.delete('/api/sessions', async (req, res) => {
+  try {
+    await Session.deleteMany({});
+    res.json({ message: 'All sessions deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // Basic route
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to the API' });

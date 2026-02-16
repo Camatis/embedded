@@ -13,42 +13,39 @@ function Dashboard({ user, onLogout }) {
     small: 0,
     medium: 0,
     large: 0,
-    total: 0
+    total: 0,
+    defective: 0
   });
+  const [isDefective, setIsDefective] = useState(false);
   const [sortingHistory, setSortingHistory] = useState([]);
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
 
-  useEffect(() => {
-    // Create WebSocket connection
-    const ws = new WebSocket('ws://192.168.1.100:81'); // Replace with your ESP32 IP
-    
-    ws.onopen = () => {
-      console.log('Connected to ESP32');
+  // Handle sensor data from hardware (abstracted for easy Raspberry Pi integration)
+  const handleSensorData = (data) => {
+    try {
+      // Update sensor states
       setSensorStates(prev => ({
-        small: { ...prev.small, status: 'Active' },
-        medium: { ...prev.medium, status: 'Active' },
-        large: { ...prev.large, status: 'Active' }
+        small: { ...prev.small, detecting: data.small },
+        medium: { ...prev.medium, detecting: data.medium },
+        large: { ...prev.large, detecting: data.large }
       }));
-    };
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Update sensor states
-        setSensorStates(prev => ({
-          small: { ...prev.small, detecting: data.small },
-          medium: { ...prev.medium, detecting: data.medium },
-          large: { ...prev.large, detecting: data.large }
+      // Check if defective
+      if (data.defective) {
+        setIsDefective(true);
+        setDetectedSize('DEFECTIVE');
+        setSortingStats(prev => ({
+          ...prev,
+          defective: prev.defective + 1
         }));
-
-        // Update detected size based on ESP32 data
+      } else {
+        setIsDefective(false);
+        // Update detected size based on hardware data
         switch(data.detectedSize) {
           case 1:
             setDetectedSize('SMALL');
-            // Update sorting stats for small mangoes
             setSortingStats(prev => ({
               ...prev,
               small: prev.small + 1,
@@ -57,7 +54,6 @@ function Dashboard({ user, onLogout }) {
             break;
           case 2:
             setDetectedSize('MEDIUM');
-            // Update sorting stats for medium mangoes
             setSortingStats(prev => ({
               ...prev,
               medium: prev.medium + 1,
@@ -66,7 +62,6 @@ function Dashboard({ user, onLogout }) {
             break;
           case 3:
             setDetectedSize('LARGE');
-            // Update sorting stats for large mangoes
             setSortingStats(prev => ({
               ...prev,
               large: prev.large + 1,
@@ -76,36 +71,50 @@ function Dashboard({ user, onLogout }) {
           default:
             setDetectedSize('NONE');
         }
-
-        // Add to sorting history with timestamp
-        if (data.detectedSize >= 1 && data.detectedSize <= 3) {
-          const timestamp = new Date().toLocaleTimeString();
-          setSortingHistory(prev => {
-            const newHistory = [...prev, {
-              timestamp,
-              size: data.detectedSize === 1 ? 'SMALL' : data.detectedSize === 2 ? 'MEDIUM' : 'LARGE'
-            }];
-            // Keep only last 100 entries
-            return newHistory.slice(-100);
-          });
-        }
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
       }
+
+      // Add to sorting history with timestamp
+      if (data.detectedSize >= 1 && data.detectedSize <= 3) {
+        const timestamp = new Date().toLocaleTimeString();
+        setSortingHistory(prev => {
+          const newHistory = [...prev, {
+            timestamp,
+            size: data.detectedSize === 1 ? 'SMALL' : data.detectedSize === 2 ? 'MEDIUM' : 'LARGE'
+          }];
+          // Keep only last 100 entries
+          return newHistory.slice(-100);
+        });
+      }
+    } catch (error) {
+      console.error('Error processing sensor data:', error);
+    }
+  };
+
+  // TODO: Replace this with Raspberry Pi connection logic
+  useEffect(() => {
+    // Placeholder for hardware connection
+    const connectToHardware = async () => {
+      // Example: Set sensors to Active when connection is ready
+      setSensorStates(prev => ({
+        small: { ...prev.small, status: 'Active' },
+        medium: { ...prev.medium, status: 'Active' },
+        large: { ...prev.large, status: 'Active' }
+      }));
+      
+      // TODO: Add your Raspberry Pi connection here
+      // Once connected, call handleSensorData(data) when data arrives
     };
 
-    ws.onclose = () => {
-      console.log('Disconnected from ESP32');
+    connectToHardware();
+
+    // Cleanup function
+    return () => {
+      // TODO: Add cleanup for Raspberry Pi connection here
       setSensorStates(prev => ({
         small: { ...prev.small, status: 'Inactive' },
         medium: { ...prev.medium, status: 'Inactive' },
         large: { ...prev.large, status: 'Inactive' }
       }));
-    };
-
-    // Cleanup on unmount
-    return () => {
-      ws.close();
     };
   }, []);
 
@@ -127,6 +136,22 @@ function Dashboard({ user, onLogout }) {
   useEffect(() => {
     fetchSessions();
   }, []);
+
+  const clearSessions = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/sessions', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        setSessions([]);
+      } else {
+        console.error('Failed to clear sessions');
+      }
+    } catch (err) {
+      console.error('Error clearing sessions', err);
+    }
+  };
 
   const handleToggleSession = async () => {
     // Toggle locally first
@@ -195,7 +220,9 @@ function Dashboard({ user, onLogout }) {
           <div className="camera-controls">
             <h2>Live Camera Feed</h2>
             <div className="camera-toggle">
-              <label className="toggle-label">Session</label>
+              <label className="toggle-label" style={{ color: sessionActive ? 'green' : 'red' }}>
+                {sessionActive ? 'Session On' : 'Session Off'}
+              </label>
               <label className="switch">
                 <input type="checkbox" checked={sessionActive} onChange={handleToggleSession} />
                 <span className="slider" />
@@ -208,9 +235,9 @@ function Dashboard({ user, onLogout }) {
             </div>
           </div>
 
-          <div className="size-card" style={{ marginTop: 12 }}>
+          <div className="size-card" style={{ marginTop: 10, backgroundColor: isDefective ? '#ffebee' : '#fff', borderColor: isDefective ? '#d32f2f' : '#ddd' }}>
             <h3>Detected Mango Size</h3>
-            <div className="size-display">{detectedSize}</div>
+            <div className="size-display" style={{ color: isDefective ? '#d32f2f' : '#FDB813' }}>{detectedSize}</div>
           </div>
         </div>
 
@@ -265,14 +292,19 @@ function Dashboard({ user, onLogout }) {
 
         {/* Session history table */}
         <div className="welcome-card div10">
-          <h2>Sorting History (Sessions)</h2>
-          <table className="history-table">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h2 style={{ margin: 0 }}>Sorting History (Sessions)</h2>
+            <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+          </div>
+          <div className="history-table-container">
+            <table className="history-table">
             <thead>
               <tr>
                 <th>Batch</th>
                 <th>Small</th>
                 <th>Medium</th>
                 <th>Large</th>
+                <th>Defective</th>
                 <th>Total</th>
                 <th>Start Time</th>
                 <th>End Time</th>
@@ -285,13 +317,15 @@ function Dashboard({ user, onLogout }) {
                   <td>{s.counts?.small ?? 0}</td>
                   <td>{s.counts?.medium ?? 0}</td>
                   <td>{s.counts?.large ?? 0}</td>
+                  <td>{s.counts?.defective ?? 0}</td>
                   <td>{(s.counts?.small||0) + (s.counts?.medium||0) + (s.counts?.large||0)}</td>
                   <td>{s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-'}</td>
                   <td>{s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-'}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </div>
     </div>
