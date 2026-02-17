@@ -279,6 +279,16 @@ function Dashboard({ user, onLogout }) {
   return (
     <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
       
+      <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
+          <div className="menu-inner">
+            <div className="overlay-welcome">
+              Welcome! {user && user.username ? `${user.username}` : ''}
+            </div>
+            {/* You can add menu items here if needed */}
+            <button className="logout-button overlay-logout" onClick={onLogout}>Logout</button>
+          </div>
+        </div>
+
       <header className="dashboard-header di">
         <div className="header-content">
           <div ref={menuToggleRef} className="menu-toggle" onClick={() => setMenuOpen(v => !v)} aria-label="Toggle menu">
@@ -291,15 +301,6 @@ function Dashboard({ user, onLogout }) {
       </header>
 
       <div className="parent">
-        <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
-          <div className="menu-inner">
-            <div className="overlay-welcome">
-              Welcome! {user && user.username ? `${user.username}` : ''}
-            </div>
-            {/* You can add menu items here if needed */}
-            <button className="logout-button overlay-logout" onClick={onLogout}>Logout</button>
-          </div>
-        </div>
         {/* Camera + detected size + toggle */}
         <div className="welcome-card camera-feed-section div2">
           <div className="camera-controls">
