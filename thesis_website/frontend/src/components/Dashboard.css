@@ -1,3 +1,12 @@
+.overlay-welcome {
+  margin-top: 32px;
+  margin-bottom: 32px;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
 /* frontend/src/components/Dashboard.css */
 .dashboard {
   min-height: 100vh;
@@ -12,7 +21,7 @@
 }
 
 .header-content {
-  max-width: 1200px;
+  max-width: 2000px;
   margin: 0 auto;
   display: flex;
   justify-content: space-between;
@@ -32,6 +41,60 @@
   align-items: center;
   gap: 20px;
 }
+
+/* Menu overlay (left) */
+.menu-overlay {
+  position: fixed;
+  left: 0;
+  top: 0;
+  height: 100vh;
+  width: 0;
+  overflow: hidden;
+  display: none;
+  z-index: 1000;
+  transition: width 0.25s ease, display 0.25s ease;
+}
+.menu-overlay.open {
+  display: flex;
+  width: 220px;
+}
+.menu-overlay .menu-inner {
+  margin-top: 24px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  position: relative;
+  background: linear-gradient(135deg, #FDB813 0%, #FD8D13 50%, #6BA82F 100%);
+}
+.overlay-logout {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.15);
+  padding: 8px 12px;
+  border-radius: 6px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 48px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 80%;
+  display: block;
+}
+.overlay-logout:hover { background: rgba(255,255,255,0.06); }
+.menu-toggle { width: 36px; height: 36px; display:flex; flex-direction:column; justify-content:space-around; cursor:pointer; margin-right: 12px; }
+.menu-toggle span { display:block; height:3px; width:22px; background:#fff; border-radius:2px; }
+.overlay-logout { margin-top: 40px; background:transparent; color:#fff; border:1px solid rgba(255,255,255,0.15); padding:8px 12px; border-radius:6px; }
+.overlay-logout:hover { background: rgba(255,255,255,0.06); }
+
+/* when menu is open, push content to the right slightly to avoid overlap */
+.dashboard.menu-open .parent { transition: margin-left 0.25s ease; margin-left: 220px; }
+
+/* make overlay match dashboard-header gradient */
+.menu-overlay .menu-inner { background: linear-gradient(135deg, #FDB813 0%, #FD8D13 50%, #6BA82F 100%); height:100%; width:100%; display:flex; flex-direction:column; align-items:center; }
+.menu-overlay .overlay-logout { color: white; border: 1px solid rgba(255,255,255,0.2); }
 
 .user-name {
   font-size: 16px;
@@ -70,6 +133,13 @@
 }
 
 .welcome-card h2 {
+/* Move dashboard title with menu */
+.dashboard-header .header-content {
+  transition: margin-left 0.25s ease;
+}
+.dashboard.menu-open .dashboard-header .header-content {
+  margin-left: 220px;
+}
   color: #333;
   font-size: 32px;
   margin-bottom: 15px;
@@ -127,22 +197,26 @@
 
 .sensor-card.small {
   width: 100%;
+  font-size: 18px;
   border-left: 4px solid #FDB813;
 }
 
 .sensor-card.medium {
   width: 100%;
+  font-size: 18px;
   border-left: 4px solid #FDB813;
 }
 
 .sensor-card.large {
   width: 100%;
+  font-size: 18px;
   border-left: 4px solid #FDB813;
 }
 
 .serial-monitor {
   font-weight: bold;
   font-family: 'Courier New', Courier, monospace;
+  font-size: 18px;
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -169,7 +243,7 @@
 
 .size-card h3 {
   color: #333;
-  font-size: 22px;
+  font-size: 24px;
   margin-bottom: 12px;
 }
 
@@ -217,6 +291,7 @@
 .stats-card h3 {
   color: #555;
   font-size: 16px;
+  font-size: 20px;
   margin-bottom: 10px;
 }
 

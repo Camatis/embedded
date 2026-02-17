@@ -1,5 +1,5 @@
 // frontend/src/components/Dashboard.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './Dashboard.css';
 
 function Dashboard({ user, onLogout }) {
@@ -21,6 +21,13 @@ function Dashboard({ user, onLogout }) {
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [editingSessionId, setEditingSessionId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+  const videoRef = useRef(null);
+  const [cameraError, setCameraError] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const overlayRef = useRef(null);
+  const menuToggleRef = useRef(null);
 
   // Handle sensor data from hardware (abstracted for easy Raspberry Pi integration)
   const handleSensorData = (data) => {
@@ -118,6 +125,31 @@ function Dashboard({ user, onLogout }) {
     };
   }, []);
 
+  // Start device webcam for live camera feed
+  useEffect(() => {
+    let localStream = null;
+    const startCamera = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setCameraError('getUserMedia not supported in this browser');
+          return;
+        }
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        if (videoRef.current) videoRef.current.srcObject = localStream;
+      } catch (err) {
+        setCameraError(err.message || 'Could not access camera');
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
+
   // Fetch past sessions from backend
   const fetchSessions = async () => {
     try {
@@ -153,6 +185,36 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+  // Inline rename handlers for session batch
+  const startEditing = (id, currentName) => {
+    setEditingSessionId(id);
+    setEditingName(currentName || '');
+  };
+
+  const cancelEditing = () => {
+    setEditingSessionId(null);
+    setEditingName('');
+  };
+
+  const saveEditing = async (id) => {
+    try {
+      const res = await fetch(`http://localhost:5000/api/sessions/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_name: editingName })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setSessions(prev => prev.map(s => (s._id === id ? updated : s)));
+        cancelEditing();
+      } else {
+        console.error('Failed to update session name');
+      }
+    } catch (err) {
+      console.error('Error updating session name', err);
+    }
+  };
+
   const handleToggleSession = async () => {
     // Toggle locally first
     const turningOn = !sessionActive;
@@ -162,7 +224,7 @@ function Dashboard({ user, onLogout }) {
       // Start new session: POST
       try {
         const payload = {
-          session_name: `Session ${new Date().toLocaleString()}`,
+          session_name: `Batch ${sessions.length + 1}`,
           counts: { small: 0, medium: 0, large: 0, extra_large: 0 },
           timestamps: { start_time: new Date() }
         };
@@ -202,19 +264,42 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (!menuOpen) return;
+      if (overlayRef.current && overlayRef.current.contains(e.target)) return;
+      if (menuToggleRef.current && menuToggleRef.current.contains(e.target)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
+
   return (
-    <div className="dashboard">
+    <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
       
       <header className="dashboard-header di">
         <div className="header-content">
-          <h1>Automated Carabao Mango Sorting System</h1>
-          <div className="user-section">
-            <button className="logout-button" onClick={onLogout}>Logout</button>
+          <div ref={menuToggleRef} className="menu-toggle" onClick={() => setMenuOpen(v => !v)} aria-label="Toggle menu">
+            <span />
+            <span />
+            <span />
           </div>
+          <h1>Automated Carabao Mango Sorting System</h1>
         </div>
       </header>
 
       <div className="parent">
+        <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
+          <div className="menu-inner">
+            <div className="overlay-welcome">
+              Welcome! {user && user.username ? `${user.username}` : ''}
+            </div>
+            {/* You can add menu items here if needed */}
+            <button className="logout-button overlay-logout" onClick={onLogout}>Logout</button>
+          </div>
+        </div>
         {/* Camera + detected size + toggle */}
         <div className="welcome-card camera-feed-section div2">
           <div className="camera-controls">
@@ -230,9 +315,13 @@ function Dashboard({ user, onLogout }) {
             </div>
           </div>
           <div className="camera-container">
-            <div className="camera-placeholder">
-              <p>Camera stream will appear here</p>
-            </div>
+            {cameraError ? (
+              <div className="camera-placeholder">
+                <p>{cameraError}</p>
+              </div>
+            ) : (
+              <video ref={videoRef} className="camera-video" autoPlay playsInline muted />
+            )}
           </div>
 
           <div className="size-card" style={{ marginTop: 10, backgroundColor: isDefective ? '#ffebee' : '#fff', borderColor: isDefective ? '#d32f2f' : '#ddd', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '150px' }}>
@@ -319,7 +408,22 @@ function Dashboard({ user, onLogout }) {
             <tbody>
               {sessions && sessions.map((s, idx) => (
                 <tr key={s._id || idx}>
-                  <td>{idx + 1}</td>
+                  {editingSessionId === s._id ? (
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input value={editingName} onChange={e => setEditingName(e.target.value)} style={{ width: 200, padding: '6px 8px' }} />
+                        <button onClick={() => saveEditing(s._id)} style={{ padding: '6px 10px' }}>Save</button>
+                        <button onClick={cancelEditing} style={{ padding: '6px 10px' }}>Cancel</button>
+                      </div>
+                    </td>
+                  ) : (
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>{s.session_name || `Batch ${idx + 1}`}</span>
+                        <button onClick={() => startEditing(s._id, s.session_name)} style={{ fontSize: 12, padding: '4px 8px' }}>Rename</button>
+                      </div>
+                    </td>
+                  )}
                   <td>{s.counts?.small ?? 0}</td>
                   <td>{s.counts?.medium ?? 0}</td>
                   <td>{s.counts?.large ?? 0}</td>
