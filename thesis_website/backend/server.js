@@ -51,7 +51,7 @@ const SessionSchema = new mongoose.Schema({
     small: { type: Number, default: 0 },
     medium: { type: Number, default: 0 },
     large: { type: Number, default: 0 },
-    extra_large: { type: Number, default: 0 }
+    defective: { type: Number, default: 0 }
   },
   quality_stats: {
     defective: { type: Number, default: 0 },
@@ -214,13 +214,47 @@ app.get('/api/sessions/:id', async (req, res) => {
 // PUT: Update a session (rename or update counts)
 app.put('/api/sessions/:id', async (req, res) => {
   try {
+    // Debug: log FULL body to see everything received
+    console.log('📥 PUT request received for ID:', req.params.id);
+    console.log('📦 Full Body:', JSON.stringify(req.body, null, 2));
+    
+    // Build update object with proper nested field handling
+    const updateData = {};
+    
+    // Handle counts object
+    if (req.body.counts) {
+      updateData.counts = req.body.counts;
+      console.log('📊 Saving counts:', updateData.counts);
+    } else {
+      console.log('⚠️  No counts received in req.body');
+    }
+    
+    // Handle quality_stats object
+    if (req.body.quality_stats) {
+      updateData.quality_stats = req.body.quality_stats;
+      console.log('📈 Saving quality_stats:', updateData.quality_stats);
+    }
+    
+    // Handle timestamps.end_time
+    if (req.body['timestamps.end_time']) {
+      updateData['timestamps.end_time'] = req.body['timestamps.end_time'];
+      console.log('⏱️  Saving end_time:', updateData['timestamps.end_time']);
+    }
+    
+    // Handle session_name for rename
+    if (req.body.session_name) {
+      updateData.session_name = req.body.session_name;
+    }
+    
     const updatedSession = await Session.findByIdAndUpdate(
       req.params.id,
-      req.body,
-      { new: true } // Return the updated document
+      updateData,
+      { new: true }
     );
+    console.log('✅ Session updated:', updatedSession);
     res.json(updatedSession);
   } catch (err) {
+    console.error('❌ Error updating session:', err);
     res.status(400).json({ message: err.message });
   }
 });
@@ -243,6 +277,48 @@ app.delete('/api/sessions', async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
+});
+
+// In-memory storage for latest sensor data (simple, resets on server restart)
+let lastSensorData = {
+  small: false,
+  medium: false,
+  large: false,
+  defective: false,
+  detectedSize: null,
+  timestamp: Date.now()
+};
+
+// POST: Receive sensor data from Raspberry Pi
+app.post('/api/sensor-data', (req, res) => {
+  try {
+    const data = req.body || {};
+    // normalize incoming payload
+    lastSensorData = {
+      small: !!data.small,
+      medium: !!data.medium,
+      large: !!data.large,
+      defective: !!data.defective,
+      detectedSize: data.detectedSize ?? data.size ?? null,
+      timestamp: Date.now()
+    };
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET: Return latest sensor data for frontend polling and clear it
+app.get('/api/sensor-data', (req, res) => {
+  const data = lastSensorData;
+  lastSensorData = null;  // Clear after reading to prevent duplicates
+  res.json(data || {});
+});
+
+// POST: Clear sensor data (called when batch stops)
+app.post('/api/clear-sensor-data', (req, res) => {
+  lastSensorData = null;
+  res.json({ success: true, message: 'Sensor data cleared' });
 });
 
 // Basic route

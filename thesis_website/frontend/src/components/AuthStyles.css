@@ -3,52 +3,62 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: calc(100vh - 120px);
-  background: linear-gradient(135deg, #FDB813 0%, #FD8D13 50%, #6BA82F 100%);
-  padding: 20px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f4f7fb, #ffffff);
+  padding: 24px;
 }
 
 .auth-card {
   background: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-  padding: 40px;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  padding: 28px;
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
+  border: 1px solid rgba(15,23,42,0.04);
 }
 
 .auth-card h2 {
   text-align: center;
-  color: #333;
-  margin-bottom: 30px;
-  font-size: 28px;
+  color: #0f172a;
+  margin-bottom: 18px;
+  font-size: 20px;
+  font-weight: 600;
 }
 
+.auth-logo {
+  width: 160px;
+  height: auto;
+  display: block;
+  margin: 0 auto 16px;
+}
 .form-group {
-  margin-bottom: 20px;
+  margin-bottom: 14px;
 }
 
 .form-group label {
   display: block;
-  margin-bottom: 8px;
-  color: #555;
+  margin-bottom: 6px;
+  color: #334155;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .form-group input {
   width: 100%;
-  padding: 12px;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
+  padding: 12px 14px;
+  border: 1px solid rgba(15,23,42,0.08);
+  border-radius: 999px;
   font-size: 14px;
-  transition: border-color 0.3s ease;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
   box-sizing: border-box;
+  background: #fbfdff;
 }
 
 .form-group input:focus {
   outline: none;
-  border-color: #FDB813;
+  box-shadow: 0 4px 14px rgba(25,118,210,0.08);
+  border-color: rgba(25,118,210,0.45);
 }
 
 .form-group input:disabled {
@@ -58,21 +68,21 @@
 
 .auth-button {
   width: 100%;
-  padding: 12px;
+  padding: 12px 14px;
   background: linear-gradient(135deg, #FDB813 0%, #FD8D13 50%, #6BA82F 100%);
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-  margin-top: 10px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  margin-top: 8px;
 }
 
 .auth-button:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 5px 20px rgba(253, 184, 19, 0.4);
+  box-shadow: 0 8px 30px rgba(3,105,161,0.18);
 }
 
 .auth-button:disabled {

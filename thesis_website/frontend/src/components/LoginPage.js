@@ -2,9 +2,13 @@
 import React, { useState } from 'react';
 import './AuthStyles.css';
 
+// Login form component: handles credential input, submission and error states
+
 function LoginPage({ onLogin, onSwitchToSignup }) {
+  // Controlled inputs
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  // UI state
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -13,8 +17,10 @@ function LoginPage({ onLogin, onSwitchToSignup }) {
     setError('');
     setLoading(true);
 
+    // Log attempt (mask password) — keep for debug, remove in production
     console.log('Attempting login with:', { username, password: '***' });
 
+    // Send credentials to backend auth endpoint
     try {
       const response = await fetch('http://localhost:5000/api/auth/login', {
         method: 'POST',
@@ -29,8 +35,10 @@ function LoginPage({ onLogin, onSwitchToSignup }) {
       console.log('Response data:', data);
 
       if (response.ok) {
+        // Successful login: lift token and user to parent
         onLogin(data.token, data.user);
       } else {
+        // Show server-provided message or generic error
         setError(data.message || 'Login failed');
       }
     } catch (err) {
@@ -41,11 +49,11 @@ function LoginPage({ onLogin, onSwitchToSignup }) {
     }
   };
 
+  // Image is served from `public/login.png` (no import required)
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <h2>Sign In</h2>
-        
+        <img src="/login.png" alt="Login" className="auth-logo" /> 
         {error && <div className="error-message">{error}</div>}
         
         <form onSubmit={handleSubmit}>

@@ -72,10 +72,6 @@ function App() {
 
   return (
     <div className="App">
-      <header className="App-header">
-        <h1>Automated Carabao Mango Sorting System</h1>
-      </header>
-      
       {currentPage === 'login' ? (
         <LoginPage 
           onLogin={handleLogin}
