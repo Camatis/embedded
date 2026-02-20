@@ -124,7 +124,8 @@ function Dashboard({ user, onLogout }) {
     let mounted = true;
     const pollSensorData = async () => {
       try {
-        const res = await fetch('https://localhost:5000/api/sensor-data');
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sensor-data`;
+        const res = await fetch(apiUrl);
         if (!res.ok) return;
         const data = await res.json();
         
@@ -209,7 +210,8 @@ function Dashboard({ user, onLogout }) {
   // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
     try {
-      const res = await fetch('https://localhost:5000/api/sessions');
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
+      const res = await fetch(apiUrl);
       if (res.ok) {
         const data = await res.json();        console.log('📋 Fetched sessions:', data);        setSessions(data);
       } else {
@@ -227,7 +229,8 @@ function Dashboard({ user, onLogout }) {
   // Delete all sessions on backend and clear local state
   const clearSessions = async () => {
     try {
-      const res = await fetch('https://localhost:5000/api/sessions', {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
+      const res = await fetch(apiUrl, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -257,7 +260,8 @@ function Dashboard({ user, onLogout }) {
   // saveEditing: persist edited session name to backend
   const saveEditing = async (id) => {
     try {
-      const res = await fetch(`https://localhost:5000/api/sessions/${id}`, {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${id}`;
+      const res = await fetch(apiUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_name: editingName })
@@ -286,14 +290,16 @@ function Dashboard({ user, onLogout }) {
       // Start new session: clear old data FIRST, then POST to backend and reset counters
       try {
         // Clear any residual sensor data from previous batch
-        await fetch('https://localhost:5000/api/clear-sensor-data', { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
+        const clearUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/clear-sensor-data`;
+        await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
         
         const payload = {
           session_name: `Batch ${sessions.length + 1}`,
           counts: { small: 0, medium: 0, large: 0, defective: 0 },
           timestamps: { start_time: new Date() }
         };
-        const res = await fetch('https://localhost:5000/api/sessions', {
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
+        const res = await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -320,7 +326,8 @@ function Dashboard({ user, onLogout }) {
           setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
           return fetchSessions();
         }
-        const res = await fetch(`https://localhost:5000/api/sessions/${currentSessionId}`, {
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${currentSessionId}`;
+        const res = await fetch(apiUrl, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -360,7 +367,8 @@ function Dashboard({ user, onLogout }) {
           setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
           countsRef.current = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
           // Clear sensor data on backend to prevent duplicate counting
-          fetch('https://localhost:5000/api/clear-sensor-data', { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
+          const clearUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/clear-sensor-data`;
+          fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
           // Small delay to ensure DB write completes before fetching
           setTimeout(() => {
             console.log('🔄 Re-fetching sessions...');

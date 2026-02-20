@@ -4,6 +4,8 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const https = require('https');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -327,6 +329,13 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+
+// HTTPS Configuration
+const options = {
+  key: fs.readFileSync('/etc/ssl/private/key.pem'),
+  cert: fs.readFileSync('/etc/ssl/certs/cert.pem')
+};
+
+https.createServer(options, app).listen(PORT, () => {
+  console.log(`✅ HTTPS Server running on https://0.0.0.0:${PORT}`);
 });
