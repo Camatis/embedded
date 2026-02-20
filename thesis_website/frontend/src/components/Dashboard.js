@@ -181,13 +181,19 @@ function Dashboard({ user, onLogout }) {
     const startCamera = async () => {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          setCameraError('getUserMedia not supported in this browser');
+          setCameraError('Camera not supported (HTTP doesn\'t allow camera access)');
           return;
         }
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         if (videoRef.current) videoRef.current.srcObject = localStream;
       } catch (err) {
-        setCameraError(err.message || 'Could not access camera');
+        if (err.name === 'NotAllowedError') {
+          setCameraError('Camera access denied (switch to HTTPS for live feed)');
+        } else if (err.name === 'NotFoundError') {
+          setCameraError('Camera not found on this device');
+        } else {
+          setCameraError(err.message || 'Could not access camera');
+        }
       }
     };
 
@@ -395,9 +401,9 @@ function Dashboard({ user, onLogout }) {
               {user && user.username ? user.username : 'User'}
             </div>
             <nav className="menu-items" aria-label="Main navigation">
-              <button type="button" onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }} className="menu-item">Dashboard</button>
-              <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className="menu-item">Batch History</button>
-              <button type="button" onClick={() => { setCurrentView('sensor-status'); setMenuOpen(false); }} className="menu-item">Sensor Status</button>
+              <button type="button" onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
+              <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
+              <button type="button" onClick={() => { setCurrentView('sensor-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'sensor-status' ? 'active' : ''}`}>Sensor Status</button>
             </nav>
             <button className="logout-button overlay-logout" onClick={onLogout}>Sign Out</button>
           </div>
@@ -427,7 +433,9 @@ function Dashboard({ user, onLogout }) {
               <div className="camera-container">
                 {cameraError ? (
                   <div className="camera-placeholder">
-                    <p>{cameraError}</p>
+                    <p><strong>Camera Unavailable</strong></p>
+                    <p style={{fontSize: '12px', marginTop: '8px'}}>{cameraError}</p>
+                    <p style={{fontSize: '12px', marginTop: '12px', color: '#666'}}>System will still track mango counts via sensors</p>
                   </div>
                 ) : (
                   <video ref={videoRef} className="camera-video" autoPlay playsInline muted />

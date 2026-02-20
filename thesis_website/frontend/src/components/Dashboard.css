@@ -161,6 +161,13 @@ body {
   background-color: rgba(255, 255, 255, 0.2);
 }
 
+.menu-item.active {
+  background-color: rgba(255, 255, 255, 0.35);
+  font-weight: 600;
+  border-left: 4px solid white;
+  padding-left: 12px;
+}
+
 .overlay-logout {
   background: #d32f2f;
   color: white;
@@ -473,18 +480,31 @@ body {
   width: 100%;
   max-width: 400px;
   height: 300px;
-  background-color: #000;
+  background-color: #1a1a1a;
   border-radius: 8px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  border: 2px dashed #444;
+  padding: 20px;
+  box-sizing: border-box;
 }
 
 .camera-placeholder p {
-  color: #666;
-  font-size: 16px;
+  color: #999;
+  font-size: 14px;
   text-align: center;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.camera-placeholder::before {
+  content: '📷';
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.6;
 }
 
 /* Grid layout for dashboard - using new flexbox layout */
