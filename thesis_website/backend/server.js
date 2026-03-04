@@ -328,14 +328,38 @@ app.get('/', (req, res) => {
   res.json({ message: 'Welcome to the API' });
 });
 
+// Development helper: clear all users (remove when deploying for real)
+app.post('/api/dev/clear-users', async (req, res) => {
+  try {
+    await User.deleteMany({});
+    res.json({ success: true, message: 'All users removed' });
+  } catch (err) {
+    console.error('Failed to clear users:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 
-// HTTPS Configuration
-const options = {
-  key: fs.readFileSync('/etc/ssl/private/key.pem'),
-  cert: fs.readFileSync('/etc/ssl/certs/cert.pem')
-};
+// Server startup (HTTPS if certs exist, otherwise HTTP)
+function startServer() {
+  const keyPath = '/etc/ssl/private/key.pem';
+  const certPath = '/etc/ssl/certs/cert.pem';
 
-https.createServer(options, app).listen(PORT, () => {
-  console.log(`✅ HTTPS Server running on https://0.0.0.0:${PORT}`);
-});
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    const options = {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath)
+    };
+    https.createServer(options, app).listen(PORT, () => {
+      console.log(`✅ HTTPS Server running on https://0.0.0.0:${PORT}`);
+    });
+  } else {
+    app.listen(PORT, () => {
+      console.log(`✅ HTTP Server running on http://0.0.0.0:${PORT}`);
+      console.log('⚠️  No SSL certificates found; running without HTTPS');
+    });
+  }
+}
+
+startServer();
