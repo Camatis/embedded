@@ -32,6 +32,34 @@ function Dashboard({ user, onLogout }) {
   const videoRef = useRef(null);
   const [cameraError, setCameraError] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const tutorialSteps = [
+    {
+      title: 'Start a New Batch',
+      body: 'Ready to begin? Click the Start New Batch button located under the System Controls panel to kick off the sorting process.'
+    },
+    {
+      title: 'Stop the Batch',
+      body: 'Whenever you need to finish or halt the current run, simply click the Stop button, also found in the System Controls.'
+    },
+    {
+      title: 'Current Batch Statistics',
+      body: 'Keep an eye on your numbers here! This section shows your live data, including total mangoes processed, size breakdowns, and the count of defective mangoes.'
+    },
+    {
+      title: 'Open the Menu Bar',
+      body: 'To access more system options, click the three horizontal lines (the hamburger icon) in the upper left corner. To close the menu, simply click anywhere outside of it.'
+    },
+    {
+      title: 'Batch History & Renaming',
+      body: 'Inside the menu bar, open the Batch History tab to review past runs. Here, you can view the total counts for previous batches and rename them for better organization.'
+    },
+    {
+      title: 'Sensor Status',
+      body: 'Ensure your hardware is running smoothly. Click the Sensor Status tab in the menu bar to verify that every single sensor is online and working correctly.'
+    }
+  ];
+  const openTutorial = () => setShowTutorial(true);
   const overlayRef = useRef(null);
   const menuToggleRef = useRef(null);
   // Track counts with ref to ensure we always save current values (not stale state)
@@ -226,6 +254,16 @@ function Dashboard({ user, onLogout }) {
     fetchSessions();
   }, []);
 
+  // show tutorial once when user logs in (persisted in localStorage)
+  useEffect(() => {
+    if (user) {
+      const seen = localStorage.getItem('tutorialSeen');
+      if (!seen) {
+        setShowTutorial(true);
+      }
+    }
+  }, [user]);
+
   // Delete all sessions on backend and clear local state
   const clearSessions = async () => {
     try {
@@ -399,6 +437,19 @@ function Dashboard({ user, onLogout }) {
   // Render dashboard with three views controlled by `currentView`
   return (
     <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
+      {showTutorial && (
+        <div className="tutorial-overlay" onClick={(e)=>e.stopPropagation()}>
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => { setShowTutorial(false); localStorage.setItem('tutorialSeen','true'); }}>✕</div>
+            {tutorialSteps.map((step, idx) => (
+              <div key={idx} className="tutorial-step">
+                <div className="tutorial-step-title">{step.title}</div>
+                <div className="tutorial-step-body">{step.body}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       
       <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
           <div className="menu-inner">
@@ -412,6 +463,7 @@ function Dashboard({ user, onLogout }) {
               <button type="button" onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
               <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
               <button type="button" onClick={() => { setCurrentView('sensor-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'sensor-status' ? 'active' : ''}`}>Sensor Status</button>
+              <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
             </nav>
             <button className="logout-button overlay-logout" onClick={onLogout}>Sign Out</button>
           </div>

@@ -16,6 +16,7 @@ body {
 .dashboard {
   min-height: 600px; /* match kiosk height */
   max-height: 600px;
+  max-width: 1010px;
   background-color: #f5f5f5;
   overflow: hidden;
 }
@@ -28,7 +29,7 @@ body {
 }
 
 .header-content {
-  max-width: 1000px;
+  max-width: 1010px;
   margin: 0 auto;
   display: flex;
   justify-content: space-between;
@@ -926,4 +927,77 @@ body {
   .history-table td {
     padding: 4px 6px;
   }
+}
+
+/* Tutorial Overlay Modal */
+.tutorial-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10000;
+  pointer-events: auto;
+}
+
+.tutorial-box {
+  background: #fff;
+  padding: 24px;
+  max-width: 980px;
+  width: 90%;
+  max-height: 550px;
+  position: relative;
+  border-radius: 4px;
+  overflow-y: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.tutorial-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 24px;
+  font-weight: bold;
+  cursor: pointer;
+  color: #333;
+  background: none;
+  border: none;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tutorial-close:hover {
+  color: #000;
+}
+
+.tutorial-step {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.tutorial-step:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.tutorial-step-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.tutorial-step-body {
+  font-size: 14px;
+  color: #666;
+  line-height: 1.5;
 }
