@@ -33,12 +33,13 @@ function Dashboard({ user, onLogout }) {
   const [cameraError, setCameraError] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
-  const [settings, setSettings] = useState({
+  const defaultSettings = {
     limitSmall: 100,
     limitMedium: 100,
     limitLarge: 100,
     limitDefective: 20
-  });
+  };
+  const [settings, setSettings] = useState(defaultSettings);
   const [sessionPaused, setSessionPaused] = useState(false);
   const [hardwareStatus, setHardwareStatus] = useState('Normal');
   const [cpuTemp, setCpuTemp] = useState(45);
@@ -86,9 +87,8 @@ function Dashboard({ user, onLogout }) {
   const stopSessionImmediately = async () => {
     if (!sessionActive) return;
     setHardwareAlert('Stopped due to limit or temperature condition.');
-    await stopBatch();
+    await pauseBatch();
   };
-
   const checkLimits = (stats) => {
     if (settings.limitSmall && stats.small >= settings.limitSmall) {
       setLimitAlert('Amount limit reached: small mangoes');
@@ -880,9 +880,17 @@ function Dashboard({ user, onLogout }) {
                   <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
                 </label>
               </div>
-              <button type="button" className="control-button start-button" style={{ width: '220px' }} onClick={() => setPasswordMessage('Settings saved')}>
-                Save Limits
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
+                <button type="button" className="control-button start-button" style={{ width: '175px' }} onClick={() => setPasswordMessage('Settings saved')}>
+                  Save Limits
+                </button>
+                <button type="button" className="control-button stop-button" style={{ width: '175px', backgroundColor: '#9e9e9e' }} onClick={() => {
+                  setSettings(defaultSettings);
+                  setPasswordMessage('Settings reset to defaults');
+                }}>
+                  Reset to Defaults
+                </button>
+              </div>
               <p className="hint">These limits automatically stop the batch when reached.</p>
             </div>
           </>

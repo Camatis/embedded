@@ -14,13 +14,25 @@ body {
 }
 /* frontend/src/components/Dashboard.css */
 .dashboard {
-  width: 1000px;
-  min-height: 600px; /* match kiosk height */
+  width: 1024px;
+  height: 600px;
+  min-height: 600px;
   max-height: 600px;
-  max-width: 1000px;
+  max-width: 1024px;
+  min-width: 1024px;
   background-color: #f5f5f5;
   overflow: hidden;
   margin: 0 auto;
+  box-shadow: 0 0 12px rgba(0,0,0,0.12);
+}
+
+.dashboard-header, .menu-overlay .menu-inner {
+  border-radius: 0;
+}
+
+.header-content {
+  width: 100%;
+  max-width: 100%;
 }
 
 .dashboard-header {
@@ -162,21 +174,25 @@ body {
   padding: 14px 16px;  /* thicker touch target */
   color: white;
   text-decoration: none;
-  font-weight: 500;
+  font-weight: 600;
   font-size: 15px;
-  transition: background-color 0.2s ease;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.35);
+  background: linear-gradient(135deg, rgba(253,184,19,0.8) 0%, rgba(253,141,19,0.8) 50%, rgba(107,168,47,0.8) 100%);
+  transition: all 0.2s ease;
 }
 
 .menu-item:hover {
-  background-color: rgba(255, 255, 255, 0.2);
+  background: linear-gradient(135deg, rgba(253,184,19,1) 0%, rgba(253,141,19,1) 50%, rgba(107,168,47,1) 100%);
+  transform: translateY(-1px);
 }
 
 .menu-item.active {
-  background-color: rgba(255, 255, 255, 0.35);
-  font-weight: 600;
-  border-left: 4px solid white;
-  padding-left: 12px;
+  box-shadow: 0 0 8px rgba(0,0,0,0.2);
+  border-color: white;
+  padding-left: 14px;
 }
+
 
 .overlay-logout {
   background: #d32f2f;
@@ -632,7 +648,132 @@ body {
   flex-direction: column;
   overflow-y: auto;
 }
+.change-password-panel,
+.settings-panel {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.09);
+  padding: 24px;
+  width: 100%;
+  max-width: 1000px;
+  margin-top: 12px;
+  border: 1px solid rgba(153, 153, 153, 0.2);
+}
 
+.change-password-panel h2,
+.settings-panel h2 {
+  margin-top: 0;
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: #222;
+}
+
+.change-password-panel form,
+.settings-panel form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.change-password-panel label,
+.settings-panel label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+}
+
+.change-password-panel input,
+.settings-panel input {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 15px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.change-password-panel input:focus,
+.settings-panel input:focus {
+  outline: none;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.14);
+}
+
+.change-password-panel .action-group,
+.settings-panel .action-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.change-password-panel .action-group button,
+.settings-panel .action-group button {
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.change-password-panel .action-group button:hover,
+.settings-panel .action-group button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+}
+
+.change-password-panel .action-group .primary,
+.settings-panel .action-group .primary {
+  background: linear-gradient(135deg, #FDB813, #FD8D13, #6BA82F);
+  color: #fff;
+}
+
+.change-password-panel .action-group .secondary,
+.settings-panel .action-group .secondary {
+  background: #f1f1f1;
+  color: #333;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.settings-grid label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #222;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.settings-grid input {
+  padding: 10px;
+  border: 1px solid #c4c4c4;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.hint {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #515151;
+}
+
+.control-button {
+  padding: 12px 18px;
+  min-height: 44px;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
 .camera-feed-section {
   background: #fff;
   border-radius: 8px;
@@ -864,6 +1005,82 @@ body {
   .total-card {
     grid-column: 1;
   }
+}
+
+/* Tutorial and overlay styles */
+.tutorial-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tutorial-box {
+  width: min(95%, 520px);
+  background-color: #fff;
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.tutorial-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: #e53935;
+  color: #fff;
+  font-size: 16px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.tutorial-content {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, auto));
+  gap: 10px;
+  width: 100%;
+  max-height: calc(100% - 70px);
+  overflow-y: auto;
+}
+
+.tutorial-step {
+  padding: 10px;
+  background: #f4f8ff;
+  border-left: 4px solid #1976d2;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 110px;
+}
+
+
+.tutorial-step-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.tutorial-step-body {
+  font-size: 13px;
+  color: #333;
 }
 
 /* Batch History View */
