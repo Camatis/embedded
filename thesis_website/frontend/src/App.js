@@ -36,11 +36,18 @@ function App() {
       }
     };
 
-    if (token) {
-      verifyToken();
-    } else {
+    if (!token) {
       setLoading(false);
+      return;
     }
+
+    if (token === 'local-token') {
+      // Local password flow; no remote token check required
+      setLoading(false);
+      return;
+    }
+
+    verifyToken();
   }, [token]);
 
   const handleLogin = (loginToken, userData) => {

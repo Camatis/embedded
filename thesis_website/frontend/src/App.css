@@ -5,6 +5,12 @@
   box-sizing: border-box;
 }
 
+html, body, #root {
+  width: 1024px;
+  height: 600px;
+  overflow: hidden;
+}
+
 body {
   font-family: 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
   -webkit-font-smoothing: antialiased;

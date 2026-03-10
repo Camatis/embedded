@@ -33,6 +33,20 @@ function Dashboard({ user, onLogout }) {
   const [cameraError, setCameraError] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [settings, setSettings] = useState({
+    limitSmall: 100,
+    limitMedium: 100,
+    limitLarge: 100,
+    limitDefective: 20
+  });
+  const [sessionPaused, setSessionPaused] = useState(false);
+  const [hardwareStatus, setHardwareStatus] = useState('Normal');
+  const [cpuTemp, setCpuTemp] = useState(45);
+  const [hardwareAlert, setHardwareAlert] = useState('');
+  const [showTempPopup, setShowTempPopup] = useState(false);
+  const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
+  const [limitAlert, setLimitAlert] = useState('');
+  const [showLimitAlert, setShowLimitAlert] = useState(false);
   const tutorialSteps = [
     {
       title: 'Start a New Batch',
@@ -62,8 +76,93 @@ function Dashboard({ user, onLogout }) {
   const openTutorial = () => setShowTutorial(true);
   const overlayRef = useRef(null);
   const menuToggleRef = useRef(null);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState('');
   // Track counts with ref to ensure we always save current values (not stale state)
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
+
+  const stopSessionImmediately = async () => {
+    if (!sessionActive) return;
+    setHardwareAlert('Stopped due to limit or temperature condition.');
+    await stopBatch();
+  };
+
+  const checkLimits = (stats) => {
+    if (settings.limitSmall && stats.small >= settings.limitSmall) {
+      setLimitAlert('Amount limit reached: small mangoes');
+      setShowLimitAlert(true);
+      stopSessionImmediately();
+      return true;
+    }
+    if (settings.limitMedium && stats.medium >= settings.limitMedium) {
+      setLimitAlert('Amount limit reached: medium mangoes');
+      setShowLimitAlert(true);
+      stopSessionImmediately();
+      return true;
+    }
+    if (settings.limitLarge && stats.large >= settings.limitLarge) {
+      setLimitAlert('Amount limit reached: large mangoes');
+      setShowLimitAlert(true);
+      stopSessionImmediately();
+      return true;
+    }
+    if (settings.limitDefective && stats.defective >= settings.limitDefective) {
+      setLimitAlert('Amount limit reached: defective mangoes');
+      setShowLimitAlert(true);
+      stopSessionImmediately();
+      return true;
+    }
+    return false;
+  };
+
+  const handleChangePassword = (e) => {
+    e.preventDefault();
+    setPasswordMessage('');
+
+    if (!pwCurrent || !pwNew || !pwConfirm) {
+      setPasswordMessage('Please complete all password fields.');
+      return;
+    }
+
+    if (pwNew.length < 6) {
+      setPasswordMessage('New password must be at least 6 characters.');
+      return;
+    }
+
+    if (pwNew !== pwConfirm) {
+      setPasswordMessage('New Password and Confirm Password do not match.');
+      return;
+    }
+
+    const persisted = JSON.parse(localStorage.getItem('userPasswords') || '{}');
+    const username = user?.username || user?.name || '';
+
+    if (!username) {
+      setPasswordMessage('User not recognized.');
+      return;
+    }
+
+    const existingPassword = persisted[username];
+    if (!existingPassword) {
+      setPasswordMessage('No local password record found for this user.');
+      return;
+    }
+
+    if (existingPassword !== pwCurrent) {
+      setPasswordMessage('Current password is incorrect.');
+      return;
+    }
+
+    persisted[username] = pwNew;
+    localStorage.setItem('userPasswords', JSON.stringify(persisted));
+
+    setPasswordMessage('Password changed successfully.');
+    setPwCurrent('');
+    setPwNew('');
+    setPwConfirm('');
+  };
 
   // Process incoming sensor payload and update UI state/counters
   // Input: { small, medium, large, defective, detectedSize }
@@ -79,41 +178,44 @@ function Dashboard({ user, onLogout }) {
       // Check if defective
       if (data.defective) {
         setIsDefective(true);
+        setIsDefectiveFlag(true);
         setDetectedSize('DEFECTIVE');
         console.log('🚨 Defective detected! Adding to count.');
         setSortingStats(prev => {
           const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
           countsRef.current = updated;  // Keep ref in sync
+          checkLimits(updated);
           return updated;
         });
       } else {
         setIsDefective(false);
+        setIsDefectiveFlag(false);
         // Update detected size based on hardware data
         switch(data.detectedSize) {
           case 1:
             setDetectedSize('SMALL');
-            console.log('📦 Small detected! Count:', sortingStats.small + 1);
             setSortingStats(prev => {
               const updated = { ...prev, small: prev.small + 1, total: prev.total + 1 };
               countsRef.current = updated;
+              checkLimits(updated);
               return updated;
             });
             break;
           case 2:
             setDetectedSize('MEDIUM');
-            console.log('📦 Medium detected! Count:', sortingStats.medium + 1);
             setSortingStats(prev => {
               const updated = { ...prev, medium: prev.medium + 1, total: prev.total + 1 };
               countsRef.current = updated;
+              checkLimits(updated);
               return updated;
             });
             break;
           case 3:
             setDetectedSize('LARGE');
-            console.log('📦 Large detected! Count:', sortingStats.large + 1);
             setSortingStats(prev => {
               const updated = { ...prev, large: prev.large + 1, total: prev.total + 1 };
               countsRef.current = updated;
+              checkLimits(updated);
               return updated;
             });
             break;
@@ -203,6 +305,43 @@ function Dashboard({ user, onLogout }) {
     };
   }, []);
 
+  // CPU temperature monitor (mock/placeholder). Replace with real endpoint if available.
+  useEffect(() => {
+    const tempInterval = setInterval(() => {
+      setCpuTemp(prevTemp => {
+        let nextTemp = prevTemp + (Math.random() * 4 - 1.5);
+        nextTemp = Math.max(35, Math.min(92, nextTemp));
+
+        if (nextTemp >= 85) {
+          setHardwareStatus('Over Limit (Shutdown)');
+          setHardwareAlert('Temperature has exceeded operational limits. Machine turning off. Saving the current batch to history.');
+          setShowTempPopup(true);
+          stopSessionImmediately();
+        } else if (nextTemp >= 80) {
+          setHardwareStatus('Throttling');
+          setHardwareAlert('Temperature is nearly exceeding limits. Stop operations immediately to prevent machine damage.');
+          setShowTempPopup(true);
+        } else if (nextTemp >= 70) {
+          setHardwareStatus('High Load');
+          setHardwareAlert('High load. Consider cooling.');
+          setShowTempPopup(true);
+        } else if (nextTemp >= 50) {
+          setHardwareStatus('Normal');
+          setHardwareAlert('Normal operating temperatures.');
+          setShowTempPopup(false);
+        } else {
+          setHardwareStatus('Ambient');
+          setHardwareAlert('Ambient temperature.');
+          setShowTempPopup(false);
+        }
+
+        return nextTemp;
+      });
+    }, 3000);
+
+    return () => clearInterval(tempInterval);
+  }, [stopSessionImmediately]);
+
   // Start and manage webcam stream for live preview
   // Attempts getUserMedia and assigns stream to <video> ref
   useEffect(() => {
@@ -282,6 +421,42 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+  const exportSortingHistory = () => {
+    if (!sessions || sessions.length === 0) {
+      alert('No sessions to export');
+      return;
+    }
+
+    const csvRows = [
+      ['Batch', 'Small', 'Medium', 'Large', 'Defective', 'Total', 'Start Time', 'End Time']
+    ];
+
+    sessions.forEach((s, idx) => {
+      csvRows.push([
+        s.session_name || `Batch ${idx + 1}`,
+        s.counts?.small ?? 0,
+        s.counts?.medium ?? 0,
+        s.counts?.large ?? 0,
+        s.counts?.defective ?? 0,
+        s.counts?.total ?? 0,
+        s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-',
+        s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-' 
+      ]);
+    });
+
+    const csvContent = csvRows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `sorting_history_${new Date().toISOString()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+
   // Inline rename handlers for session batch
   // startEditing: enable edit mode for a session
   const startEditing = (id, currentName) => {
@@ -319,71 +494,63 @@ function Dashboard({ user, onLogout }) {
   // handleToggleSession: start or stop a sorting session (POST / PUT)
   // handleToggleSession: start or stop a sorting session (POST / PUT)
   // Also saves final counts to batch history when stopping
-  const handleToggleSession = async () => {
-    // Toggle local active flag immediately for responsive UI
-    const turningOn = !sessionActive;
-    setSessionActive(turningOn);
+  const startNewSession = async () => {
+    try {
+      const clearUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/clear-sensor-data`;
+      await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
 
-    if (turningOn) {
-      // Start new session: clear old data FIRST, then POST to backend and reset counters
-      try {
-        // Clear any residual sensor data from previous batch
-        const clearUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/clear-sensor-data`;
-        await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
-        
-        const payload = {
-          session_name: `Batch ${sessions.length + 1}`,
-          counts: { small: 0, medium: 0, large: 0, defective: 0 },
-          timestamps: { start_time: new Date() }
-        };
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
-        const res = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (res.ok) {
-          const created = await res.json();
-          setCurrentSessionId(created._id);
-          // Reset local counters on new batch start
-          const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
-          setSortingStats(initialCounts);
-          countsRef.current = initialCounts;
-          console.log('✅ New batch started. Data cleared.');
-          fetchSessions();
-        } else {
-          console.error('Failed to start session');
-        }
-      } catch (err) {
-        console.error('Error starting session', err);
+      const payload = {
+        session_name: `Batch ${sessions.length + 1}`,
+        counts: { small: 0, medium: 0, large: 0, defective: 0 },
+        timestamps: { start_time: new Date() }
+      };
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setCurrentSessionId(created._id);
+        const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
+        setSortingStats(initialCounts);
+        countsRef.current = initialCounts;
+        setSessionActive(true);
+        setSessionPaused(false);
+        setHardwareAlert('New batch started');
+        fetchSessions();
+      } else {
+        console.error('Failed to start session');
       }
-    } else {
-      // Stop current session: save final counts and end_time
-      try {
-        if (!currentSessionId) {
-          setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
-          return fetchSessions();
-        }
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${currentSessionId}`;
-        const res = await fetch(apiUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            counts: {
-              small: countsRef.current.small,
-              medium: countsRef.current.medium,
-              large: countsRef.current.large,
-              defective: countsRef.current.defective
-            },
-            quality_stats: {
-              non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
-              defective: countsRef.current.defective,
-              total: countsRef.current.total
-            },
-            'timestamps.end_time': new Date()
-          })
-        });
-        const bodyToSend = {
+    } catch (err) {
+      console.error('Error starting session', err);
+    }
+  };
+
+  const continueBatch = () => {
+    if (!currentSessionId) {
+      setHardwareAlert('No stopped batch exists. Start new batch.');
+      return;
+    }
+    setSessionActive(true);
+    setSessionPaused(false);
+    setHardwareAlert('Continuing existing batch');
+  };
+
+  const stopBatch = async () => {
+    try {
+      if (!currentSessionId) {
+        setHardwareAlert('No active batch to stop');
+        setSessionActive(false);
+        setSessionPaused(false);
+        return;
+      }
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${currentSessionId}`;
+      const res = await fetch(apiUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           counts: {
             small: countsRef.current.small,
             medium: countsRef.current.medium,
@@ -394,30 +561,30 @@ function Dashboard({ user, onLogout }) {
             non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
             defective: countsRef.current.defective,
             total: countsRef.current.total
-          }
-        };
-        console.log('📤 Sending PUT request with quality_stats:', bodyToSend);
-        if (res.ok) {
-          setCurrentSessionId(null);
-          // Log BEFORE resetting
-          console.log('✅ Batch stopped. Final counts saved:', countsRef.current);
-          // Reset counters when batch stops
-          setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
-          countsRef.current = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
-          // Clear sensor data on backend to prevent duplicate counting
-          const clearUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/clear-sensor-data`;
-          fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
-          // Small delay to ensure DB write completes before fetching
-          setTimeout(() => {
-            console.log('🔄 Re-fetching sessions...');
-            fetchSessions();
-          }, 500);
-        } else {
-          console.error('Failed to stop session');
-        }
-      } catch (err) {
-        console.error('Error stopping session', err);
+          },
+          'timestamps.end_time': new Date()
+        })
+      });
+      if (res.ok) {
+        setSessionActive(false);
+        setSessionPaused(true);
+        setHardwareAlert('Batch paused - you may continue or start a new batch');
+        setTimeout(() => { fetchSessions(); }, 500);
+      } else {
+        console.error('Failed to stop session');
       }
+    } catch (err) {
+      console.error('Error stopping session', err);
+    }
+  };
+
+  const handleToggleSession = async () => {
+    if (sessionActive) {
+      await stopBatch();
+    } else if (sessionPaused && currentSessionId) {
+      continueBatch();
+    } else {
+      await startNewSession();
     }
   };
 
@@ -441,12 +608,32 @@ function Dashboard({ user, onLogout }) {
         <div className="tutorial-overlay" onClick={(e)=>e.stopPropagation()}>
           <div className="tutorial-box">
             <div className="tutorial-close" onClick={() => { setShowTutorial(false); localStorage.setItem('tutorialSeen','true'); }}>✕</div>
-            {tutorialSteps.map((step, idx) => (
-              <div key={idx} className="tutorial-step">
-                <div className="tutorial-step-title">{step.title}</div>
-                <div className="tutorial-step-body">{step.body}</div>
-              </div>
-            ))}
+            <div className="tutorial-content">
+              {tutorialSteps.map((step, idx) => (
+                <div key={idx} className="tutorial-step">
+                  <div className="tutorial-step-title">{step.title}</div>
+                  <div className="tutorial-step-body">{step.body}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {showLimitAlert && (
+        <div className="tutorial-overlay" onClick={() => setShowLimitAlert(false)}>
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => setShowLimitAlert(false)}>✕</div>
+            <h3 style={{ color: 'red' }}>Amount limit reached</h3>
+            <p>{limitAlert}</p>
+          </div>
+        </div>
+      )}
+      {showTempPopup && (
+        <div className="tutorial-overlay" onClick={() => setShowTempPopup(false)}>
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => setShowTempPopup(false)}>✕</div>
+            <h3 style={{ color: '#b71c1c' }}>CPU Temperature Alert</h3>
+            <p>{hardwareAlert}</p>
           </div>
         </div>
       )}
@@ -462,7 +649,9 @@ function Dashboard({ user, onLogout }) {
             <nav className="menu-items" aria-label="Main navigation">
               <button type="button" onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
               <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
-              <button type="button" onClick={() => { setCurrentView('sensor-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'sensor-status' ? 'active' : ''}`}>Sensor Status</button>
+              <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
+              <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
+              <button type="button" onClick={() => { setCurrentView('change-password'); setMenuOpen(false); }} className={`menu-item ${currentView === 'change-password' ? 'active' : ''}`}>Change Password</button>
               <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
             </nav>
             <button className="logout-button overlay-logout" onClick={onLogout}>Sign Out</button>
@@ -505,20 +694,25 @@ function Dashboard({ user, onLogout }) {
 
             <div className="system-controls">
               <h3>System Controls</h3>
-              <button 
-                className="control-button start-button" 
-                onClick={handleToggleSession}
-                disabled={sessionActive}
-              >
-                Start New Batch
-              </button>
-              <button 
-                className="control-button stop-button" 
-                onClick={handleToggleSession}
-                disabled={!sessionActive}
-              >
-                Stop
-              </button>
+              {isDefectiveFlag && <div style={{ color: 'red', fontWeight: 700, marginBottom: '8px' }}>DEFECTIVE</div>}
+              <div className="system-control-actions">
+                <button 
+                  className="control-button start-button" 
+                  onClick={handleToggleSession}
+                  disabled={sessionActive && !sessionPaused}
+                  style={{ flex: 1, marginRight: '8px' }}
+                >
+                  {sessionPaused ? 'Continue Batch' : 'Start New Batch'}
+                </button>
+                <button 
+                  className="control-button stop-button" 
+                  onClick={handleToggleSession}
+                  disabled={!sessionActive}
+                  style={{ flex: 1 }}
+                >
+                  Stop
+                </button>
+              </div>
             </div>
           </div>
 
@@ -555,11 +749,11 @@ function Dashboard({ user, onLogout }) {
           </div>
         </div>
           </>
-        ) : currentView === 'sensor-status' ? (
+        ) : currentView === 'hardware-status' ? (
           <>
-        {/* Sensor Status View */}
+        {/* Hardware Status View */}
         <div className="sensor-status-container">
-          <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Sensor Status</h2>
+          <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Status</h2>
           
           <div className="sensor-grid">
             <div className="welcome-card sensor-card small">
@@ -589,7 +783,70 @@ function Dashboard({ user, onLogout }) {
               </p>
             </div>
           </div>
+          <div className="hardware-status-panel" style={{ marginTop: '20px' }}>
+            <h3>CPU Temperature Monitor</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '70%', background: '#eee', borderRadius: '8px', height: '22px', overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, Math.round((cpuTemp / 90) * 100))}%`, height: '100%', background: cpuTemp >= 85 ? '#ff5252' : cpuTemp >= 80 ? '#ffeb3b' : cpuTemp >= 70 ? '#ff9800' : cpuTemp >= 50 ? '#4caf50' : '#2196f3', transition: 'width 0.3s ease' }} />
+              </div>
+              <strong>{cpuTemp.toFixed(1)}°C</strong>
+            </div>
+            <p style={{ marginTop: '8px', color: cpuTemp >= 85 ? '#b71c1c' : cpuTemp >= 80 ? '#ff6f00' : cpuTemp >= 70 ? '#f57c00' : '#333' }}>{hardwareStatus}: {hardwareAlert}</p>
+          </div>
         </div>
+          </>
+        ) : currentView === 'change-password' ? (
+          <>
+            {/* Change Password View */}
+            <div className="change-password-panel">
+              <h2>Change Password</h2>
+              <form onSubmit={handleChangePassword} style={{ display: 'grid', gap: '14px' }}>
+                <label>
+                  Current Password
+                  <input type="password" value={pwCurrent} onChange={e => setPwCurrent(e.target.value)} required />
+                </label>
+                <label>
+                  New Password
+                  <input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} required />
+                </label>
+                <label>
+                  Confirm New Password
+                  <input type="password" value={pwConfirm} onChange={e => setPwConfirm(e.target.value)} required />
+                </label>
+                <button type="submit" className="control-button start-button" style={{ width: '220px' }}>Save Password</button>
+                {passwordMessage && <p style={{ color: passwordMessage.includes('successfully') ? '#2e7d32' : '#d32f2f', fontWeight: 600 }}>{passwordMessage}</p>}
+                <p className="hint">New password must be at least 6 characters.</p>
+              </form>
+            </div>
+          </>
+        ) : currentView === 'settings' ? (
+          <>
+            {/* Settings View */}
+            <div className="settings-panel">
+              <h2>Settings</h2>
+              <div className="settings-grid">
+                <label>
+                  Small mango limit:
+                  <input type="number" min="0" value={settings.limitSmall} onChange={e => setSettings(s => ({ ...s, limitSmall: Number(e.target.value) }))} />
+                </label>
+                <label>
+                  Medium mango limit:
+                  <input type="number" min="0" value={settings.limitMedium} onChange={e => setSettings(s => ({ ...s, limitMedium: Number(e.target.value) }))} />
+                </label>
+                <label>
+                  Large mango limit:
+                  <input type="number" min="0" value={settings.limitLarge} onChange={e => setSettings(s => ({ ...s, limitLarge: Number(e.target.value) }))} />
+                </label>
+                <label>
+                  Defective mango limit:
+                  <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
+                </label>
+              </div>
+              <button type="button" className="control-button start-button" style={{ width: '220px' }} onClick={() => setPasswordMessage('Settings saved')}>
+                Save Limits
+              </button>
+              <p className="hint">These limits automatically stop the batch when reached.</p>
+            </div>
           </>
         ) : (
           <>
@@ -597,7 +854,10 @@ function Dashboard({ user, onLogout }) {
         <div className="batch-history-container">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h2 style={{ margin: 0 }}>Sorting History (Sessions)</h2>
-            <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+            <div>
+              <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
+              <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+            </div>
           </div>
           <div className="history-table-container">
             <table className="history-table">
