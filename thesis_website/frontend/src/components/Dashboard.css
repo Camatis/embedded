@@ -14,15 +14,13 @@ body {
 }
 /* frontend/src/components/Dashboard.css */
 .dashboard {
-  width: 1024px;
-  height: 600px;
-  max-width: 1024px;
+  width: 1000px;
+  min-height: 600px; /* match kiosk height */
   max-height: 600px;
-  min-width: 1024px;
-  min-height: 600px;
+  max-width: 1000px;
   background-color: #f5f5f5;
   overflow: hidden;
-  position: relative;
+  margin: 0 auto;
 }
 
 .dashboard-header {
@@ -154,22 +152,18 @@ body {
   display: flex;
   flex-direction: column;
   width: 100%;
-  gap: 8px;
+  gap: 10px;   /* thicker gap */
   flex: 1;
   padding: 0 16px;
 }
 
 .menu-item {
   display: block;
-  padding: 12px 16px;
+  padding: 14px 16px;  /* thicker touch target */
   color: white;
   text-decoration: none;
   font-weight: 500;
-  font-size: 14px;
-  border-radius: 6px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
+  font-size: 15px;
   transition: background-color 0.2s ease;
 }
 
@@ -612,46 +606,32 @@ body {
   border-radius: 6px;
 }
 
-/* Two-Column Dashboard Layout - left fixed width, right auto */
+/* Two-Column Dashboard Layout - 50/50 split */
 .dashboard-container {
   display: flex;
   gap: 6px;
-  width: 100%;
-  max-width: 1024px;
-  margin: 4px auto;
+  width: calc(100% - 8px);
+  max-width: 100%;
+  margin: 4px 4px;
   padding: 0;
   height: 510px; /* fill available space after header */
-  box-sizing: border-box;
-  overflow: hidden;
 }
 
 .dashboard-left {
-  flex: 0 0 500px;
-  width: 500px;
-  min-width: 500px;
-  max-width: 500px;
+  flex: 0 0 50%; /* exactly 50% */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .dashboard-right {
-  flex: 1 1 auto;
+  flex: 0 0 50%; /* exactly 50% */
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  width: calc(100% - 506px); /* 500px left + 6px gap */
+  overflow-y: auto;
 }
-
-
-@media (max-width: 1024px) {
-  .dashboard-container {
-    max-width: 100%;
-    width: 100%;
-  }
-}
-
 
 .camera-feed-section {
   background: #fff;
@@ -671,9 +651,13 @@ body {
 
 .system-control-actions {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: row;
+  gap: 10px;
   width: 100%;
+}
+
+.system-control-actions .control-button {
+  flex: 1;
 }
 
 .system-controls h3 {
@@ -685,12 +669,14 @@ body {
 
 .control-button {
   width: 100%;
-  padding: 12px 16px;
+  padding: 8px 12px;
   margin-bottom: 6px;
   border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 700;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 @media (max-width: 768px) {
@@ -865,7 +851,7 @@ body {
   }
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 768px) {
   .dashboard-container {
     flex-direction: column;
     gap: 16px;
@@ -885,127 +871,9 @@ body {
   background: white;
   border-radius: 12px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
-  padding: 30px;
-  max-width: 100%;
-  width: 100%;
-  margin: 24px auto;
-  overflow: hidden;
-}
-
-.settings-panel, .change-password-panel {
-  background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 10px;
-  padding: 22px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-  max-width: 720px;
-  margin: 0 auto;
-}
-
-.settings-panel h2, .change-password-panel h2 {
-  margin-bottom: 18px;
-  color: #333;
-  font-size: 20px;
-  border-bottom: 1px solid #eee;
-  padding-bottom: 10px;
-}
-
-.settings-panel label,
-.change-password-panel label {
-  display: block;
-  font-size: 15px;
-  margin-bottom: 8px;
-  color: #444;
-}
-
-.settings-panel input,
-.change-password-panel input {
-  width: 100%;
-  font-size: 16px;
-  padding: 12px 14px;
-  border: 1px solid #c4c4c4;
-  border-radius: 8px;
-  margin-bottom: 12px;
-  box-sizing: border-box;
-}
-
-.settings-panel button,
-.change-password-panel button {
-  margin-top: 10px;
-  padding: 12px 16px;
-  font-size: 16px;
-  border-radius: 8px;
-  width: auto;
-  cursor: pointer;
-}
-
-.settings-panel .hint,
-.change-password-panel .hint {
-  font-size: 13px;
-  color: #666;
-  margin-top: 4px;
-}
-
-.settings-panel .settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
-  gap: 14px;
-}
-
-@media (max-width: 900px) {
-  .settings-panel .settings-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Shared modal overlay style for center popups */
-.modal-overlay,
-.tutorial-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.65);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 10000;
-  padding: 16px;
-}
-
-.modal-box,
-.tutorial-box {
-  background: #fff;
-  border-radius: 10px;
-  padding: 22px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.25);
-  max-width: 520px;
-  width: 100%;
-  max-height: 84vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  text-align: center;
-}
-
-.modal-box h3,
-.tutorial-box h3,
-.modal-box p,
-.tutorial-box p,
-.modal-box .hint,
-.tutorial-box .hint {
-  text-align: center;
-}
-
-.modal-box .modal-content,
-.tutorial-box .modal-content {
-  overflow-y: auto;
-  text-align: center;
-}
-
-.modal-box .tutorial-close,
-.tutorial-box .tutorial-close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
+  padding: 24px;
+  max-width: 1400px;
+  margin: 30px auto;
 }
 
 /* Sensor Status View */
@@ -1068,112 +936,4 @@ body {
   .history-table td {
     padding: 4px 6px;
   }
-}
-
-/* Tutorial Overlay Modal */
-.tutorial-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 10000;
-  pointer-events: auto;
-}
-
-.tutorial-box {
-  background: #fff;
-  padding: 16px;
-  max-width: 900px;
-  width: 96%;
-  max-height: 520px;
-  height: 520px;
-  position: relative;
-  border-radius: 4px;
-  overflow: hidden;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  text-align: center;
-}
-
-.tutorial-box p,
-.tutorial-box h3,
-.tutorial-step-title,
-.tutorial-step-body {
-  text-align: center;
-}
-
-.tutorial-content {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  height: calc(100% - 36px);
-  overflow: hidden;
-}
-
-.tutorial-step {
-  background: #f9f9f9;
-  padding: 8px;
-  border-radius: 4px;
-  font-size: 13px;
-  line-height: 1.3;
-  min-height: 80px;
-  max-height: 120px;
-  overflow: hidden;
-}
-
-.tutorial-step-title {
-  font-size: 14px;
-  margin-bottom: 4px;
-}
-
-.tutorial-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  font-size: 24px;
-  font-weight: bold;
-  cursor: pointer;
-  color: #333;
-  background: none;
-  border: none;
-  padding: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tutorial-close:hover {
-  color: #000;
-}
-
-.tutorial-step {
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #eee;
-}
-
-.tutorial-step:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
-}
-
-.tutorial-step-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: #333;
-}
-
-.tutorial-step-body {
-  font-size: 12px;
-  color: #666;
-  line-height: 1.4;
-  max-height: 70px;
-  overflow: hidden;
 }

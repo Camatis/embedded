@@ -538,12 +538,10 @@ function Dashboard({ user, onLogout }) {
     setHardwareAlert('Continuing existing batch');
   };
 
-  const stopBatch = async () => {
+  const endBatch = async () => {
     try {
       if (!currentSessionId) {
-        setHardwareAlert('No active batch to stop');
-        setSessionActive(false);
-        setSessionPaused(false);
+        setHardwareAlert('No batch to stop');
         return;
       }
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${currentSessionId}`;
@@ -567,20 +565,60 @@ function Dashboard({ user, onLogout }) {
       });
       if (res.ok) {
         setSessionActive(false);
-        setSessionPaused(true);
-        setHardwareAlert('Batch paused - you may continue or start a new batch');
+        setSessionPaused(false);
+        setCurrentSessionId(null);
+        setHardwareAlert('Batch stopped and finalized');
         setTimeout(() => { fetchSessions(); }, 500);
       } else {
-        console.error('Failed to stop session');
+        console.error('Failed to end batch');
       }
     } catch (err) {
-      console.error('Error stopping session', err);
+      console.error('Error ending batch', err);
+    }
+  };
+
+  const pauseBatch = async () => {
+    try {
+      if (!currentSessionId) {
+        setHardwareAlert('No active batch to pause');
+        setSessionActive(false);
+        setSessionPaused(false);
+        return;
+      }
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${currentSessionId}`;
+      const res = await fetch(apiUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          counts: {
+            small: countsRef.current.small,
+            medium: countsRef.current.medium,
+            large: countsRef.current.large,
+            defective: countsRef.current.defective
+          },
+          quality_stats: {
+            non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
+            defective: countsRef.current.defective,
+            total: countsRef.current.total
+          }
+        })
+      });
+      if (res.ok) {
+        setSessionActive(false);
+        setSessionPaused(true);
+        setHardwareAlert('Batch paused - you may continue or stop batch');
+        setTimeout(() => { fetchSessions(); }, 500);
+      } else {
+        console.error('Failed to pause session');
+      }
+    } catch (err) {
+      console.error('Error pausing session', err);
     }
   };
 
   const handleToggleSession = async () => {
     if (sessionActive) {
-      await stopBatch();
+      await pauseBatch();
     } else if (sessionPaused && currentSessionId) {
       continueBatch();
     } else {
@@ -698,19 +736,19 @@ function Dashboard({ user, onLogout }) {
               <div className="system-control-actions">
                 <button 
                   className="control-button start-button" 
-                  onClick={handleToggleSession}
-                  disabled={sessionActive && !sessionPaused}
-                  style={{ flex: 1, marginRight: '8px' }}
+                  onClick={sessionPaused ? continueBatch : startNewSession}
+                  disabled={sessionActive}
+                  style={{ fontSize: '15px', padding: '14px 16px' }}
                 >
                   {sessionPaused ? 'Continue Batch' : 'Start New Batch'}
                 </button>
                 <button 
                   className="control-button stop-button" 
-                  onClick={handleToggleSession}
-                  disabled={!sessionActive}
-                  style={{ flex: 1 }}
+                  onClick={sessionActive ? pauseBatch : sessionPaused ? endBatch : null}
+                  disabled={!sessionActive && !sessionPaused}
+                  style={{ fontSize: '15px', padding: '14px 16px' }}
                 >
-                  Stop
+                  {sessionActive ? 'Stop' : sessionPaused ? 'Stop Batch' : 'Stop'}
                 </button>
               </div>
             </div>
