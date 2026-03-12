@@ -1,5 +1,6 @@
 // frontend/src/components/Dashboard.js
 import React, { useState, useEffect, useRef } from 'react';
+import { jsPDF } from 'jspdf';
 import './Dashboard.css';
 
 function Dashboard({ user, onLogout }) {
@@ -83,6 +84,25 @@ function Dashboard({ user, onLogout }) {
   const [passwordMessage, setPasswordMessage] = useState('');
   // Track counts with ref to ensure we always save current values (not stale state)
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
+
+  const controlConveyor = async (action) => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/conveyor`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        console.error('Conveyor control failed', result);
+      }
+      return result;
+    } catch (err) {
+      console.error('Conveyor control error', err);
+      return { success: false, message: err.message };
+    }
+  };
 
   const stopSessionImmediately = async () => {
     if (!sessionActive) return;
@@ -305,41 +325,53 @@ function Dashboard({ user, onLogout }) {
     };
   }, []);
 
-  // CPU temperature monitor (mock/placeholder). Replace with real endpoint if available.
+  // CPU temperature monitor (RPi read from /sys/class/thermal/thermal_zone0/temp)
   useEffect(() => {
-    const tempInterval = setInterval(() => {
-      setCpuTemp(prevTemp => {
-        let nextTemp = prevTemp + (Math.random() * 4 - 1.5);
-        nextTemp = Math.max(35, Math.min(92, nextTemp));
-
-        if (nextTemp >= 85) {
-          setHardwareStatus('Over Limit (Shutdown)');
-          setHardwareAlert('Temperature has exceeded operational limits. Machine turning off. Saving the current batch to history.');
-          setShowTempPopup(true);
-          stopSessionImmediately();
-        } else if (nextTemp >= 80) {
-          setHardwareStatus('Throttling');
-          setHardwareAlert('Temperature is nearly exceeding limits. Stop operations immediately to prevent machine damage.');
-          setShowTempPopup(true);
-        } else if (nextTemp >= 70) {
-          setHardwareStatus('High Load');
-          setHardwareAlert('High load. Consider cooling.');
-          setShowTempPopup(true);
-        } else if (nextTemp >= 50) {
-          setHardwareStatus('Normal');
-          setHardwareAlert('Normal operating temperatures.');
-          setShowTempPopup(false);
+    const fetchTemp = async () => {
+      try {
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/cpu-temp`;
+        const res = await fetch(apiUrl);
+        const data = await res.json();
+        if (res.ok && data && typeof data.cpuTemp === 'number') {
+          setCpuTemp(data.cpuTemp);
+          if (data.cpuTemp >= 85) {
+            setHardwareStatus('Over Limit (Shutdown)');
+            setHardwareAlert('Temperature has exceeded operational limits. Machine turning off. Saving the current batch to history.');
+            setShowTempPopup(true);
+            stopSessionImmediately();
+          } else if (data.cpuTemp >= 80) {
+            setHardwareStatus('Throttling');
+            setHardwareAlert('Temperature is nearly exceeding limits. Stop operations immediately to prevent machine damage.');
+            setShowTempPopup(true);
+          } else if (data.cpuTemp >= 70) {
+            setHardwareStatus('High Load');
+            setHardwareAlert('High load. Consider cooling.');
+            setShowTempPopup(true);
+          } else if (data.cpuTemp >= 50) {
+            setHardwareStatus('Normal');
+            setHardwareAlert('Normal operating temperatures.');
+            setShowTempPopup(false);
+          } else {
+            setHardwareStatus('Ambient');
+            setHardwareAlert('Ambient temperature.');
+            setShowTempPopup(false);
+          }
         } else {
-          setHardwareStatus('Ambient');
-          setHardwareAlert('Ambient temperature.');
-          setShowTempPopup(false);
+          // fallback to simulated value when no real sensor available
+          setCpuTemp(prevTemp => {
+            let nextTemp = prevTemp + (Math.random() * 4 - 1.5);
+            nextTemp = Math.max(35, Math.min(92, nextTemp));
+            return nextTemp;
+          });
         }
+      } catch (err) {
+        console.error('Could not read CPU temperature', err);
+      }
+    };
 
-        return nextTemp;
-      });
-    }, 3000);
-
-    return () => clearInterval(tempInterval);
+    fetchTemp();
+    const intervalId = setInterval(fetchTemp, 3000);
+    return () => clearInterval(intervalId);
   }, [stopSessionImmediately]);
 
   // Start and manage webcam stream for live preview
@@ -427,33 +459,99 @@ function Dashboard({ user, onLogout }) {
       return;
     }
 
-    const csvRows = [
-      ['Batch', 'Small', 'Medium', 'Large', 'Defective', 'Total', 'Start Time', 'End Time']
-    ];
+    try {
+      const doc = new jsPDF('landscape');
+      const margin = 18;
+      let y = 18;
 
-    sessions.forEach((s, idx) => {
-      csvRows.push([
-        s.session_name || `Batch ${idx + 1}`,
-        s.counts?.small ?? 0,
-        s.counts?.medium ?? 0,
-        s.counts?.large ?? 0,
-        s.counts?.defective ?? 0,
-        s.counts?.total ?? 0,
-        s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-',
-        s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-' 
-      ]);
-    });
+      doc.setTextColor('#2b2b2b');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(18);
+      doc.text('Mango Sorter Batch History', margin, y);
 
-    const csvContent = csvRows.map(r => r.join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `sorting_history_${new Date().toISOString()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      y += 10;
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Generated: ${new Date().toLocaleString()}`, margin, y);
+      y += 8;
+      doc.text(`Total batches: ${sessions.length}`, margin, y);
+
+      y += 12;
+      const headers = ['Batch', 'Small', 'Medium', 'Large', 'Defective', 'Total', 'Start Time', 'End Time'];
+      const colW = [30, 20, 20, 20, 25, 20, 40, 40];
+      let x = margin;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      headers.forEach((heading, i) => {
+        doc.text(heading, x, y);
+        x += colW[i];
+      });
+
+      y += 8;
+      doc.setFont('helvetica', 'normal');
+
+      let totals = { small: 0, medium: 0, large: 0, defective: 0, total: 0 };
+
+      sessions.forEach((s, idx) => {
+        if (y > 265) {
+          doc.addPage();
+          y = 20;
+        }
+
+        x = margin;
+        const start = s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-';
+        const end = s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-';
+        const row = [
+          s.session_name || `Batch ${idx + 1}`,
+          s.counts?.small ?? 0,
+          s.counts?.medium ?? 0,
+          s.counts?.large ?? 0,
+          s.counts?.defective ?? 0,
+          s.counts?.total ?? 0,
+          start,
+          end
+        ];
+
+        totals.small += row[1];
+        totals.medium += row[2];
+        totals.large += row[3];
+        totals.defective += row[4];
+        totals.total += row[5];
+
+        row.forEach((cell, i) => {
+          const value = String(cell);
+          doc.text(value, x, y);
+          x += colW[i];
+        });
+        y += 7;
+      });
+
+      if (y + 18 < 285) {
+        y += 10;
+      } else {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('Totals', margin, y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(totals.small), margin + colW[0], y);
+      doc.text(String(totals.medium), margin + colW[0] + colW[1], y);
+      doc.text(String(totals.large), margin + colW[0] + colW[1] + colW[2], y);
+      doc.text(String(totals.defective), margin + colW[0] + colW[1] + colW[2] + colW[3], y);
+      doc.text(String(totals.total), margin + colW[0] + colW[1] + colW[2] + colW[3] + colW[4], y);
+
+      const fileName = `batch_history_export_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`;
+      doc.save(fileName);
+
+      return;
+    } catch (err) {
+      console.error('PDF export failed, check jsPDF installation:', err);
+      alert('PDF export failed. Please install jsPDF and reload (npm install jspdf).');
+      return;
+    }
   };
 
 
@@ -519,6 +617,7 @@ function Dashboard({ user, onLogout }) {
         setSessionActive(true);
         setSessionPaused(false);
         setHardwareAlert('New batch started');
+        await controlConveyor('start');
         fetchSessions();
       } else {
         console.error('Failed to start session');
@@ -528,7 +627,7 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
-  const continueBatch = () => {
+  const continueBatch = async () => {
     if (!currentSessionId) {
       setHardwareAlert('No stopped batch exists. Start new batch.');
       return;
@@ -536,6 +635,7 @@ function Dashboard({ user, onLogout }) {
     setSessionActive(true);
     setSessionPaused(false);
     setHardwareAlert('Continuing existing batch');
+    await controlConveyor('start');
   };
 
   const endBatch = async () => {
@@ -564,6 +664,7 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
+        await controlConveyor('stop');
         setSessionActive(false);
         setSessionPaused(false);
         setCurrentSessionId(null);
@@ -604,6 +705,7 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
+        await controlConveyor('stop');
         setSessionActive(false);
         setSessionPaused(true);
         setHardwareAlert('Batch paused - you may continue or stop batch');
@@ -722,7 +824,10 @@ function Dashboard({ user, onLogout }) {
                   <div className="camera-placeholder">
                     <p><strong>Camera Unavailable</strong></p>
                     <p style={{fontSize: '12px', marginTop: '8px'}}>{cameraError}</p>
-                    <p style={{fontSize: '12px', marginTop: '12px', color: '#666'}}>System will still track mango counts via sensors</p>
+                    <p style={{fontSize: '12px', marginTop: '12px', color: '#666'}}>
+                      On Pi, any connected USB webcam should work. Reconnect camera if needed.
+                      Chrome requires HTTPS for camera on remote hosts; localhost is allowed over HTTP.
+                    </p>
                   </div>
                 ) : (
                   <video ref={videoRef} className="camera-video" autoPlay playsInline muted />

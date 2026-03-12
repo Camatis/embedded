@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const https = require('https');
 const fs = require('fs');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -321,6 +322,81 @@ app.get('/api/sensor-data', (req, res) => {
 app.post('/api/clear-sensor-data', (req, res) => {
   lastSensorData = null;
   res.json({ success: true, message: 'Sensor data cleared' });
+});
+
+// GET: CPU temp for RPi (requires running on RPi)
+app.get('/api/cpu-temp', async (req, res) => {
+  try {
+    let cpuTemp = null;
+    if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
+      const raw = fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8').trim();
+      cpuTemp = Number(raw) / 1000;
+    } else {
+      // fallback for Linux if sysfs not present
+      const exec = require('child_process').exec;
+      exec("cat /proc/cpuinfo | grep 'model name'", (err, stdout) => {
+        if (err) {
+          return res.status(500).json({ success: false, message: 'Cannot read CPU temperature' });
+        }
+        return res.json({ success: true, cpuTemp: null, message: 'Temperature source not found' });
+      });
+      return;
+    }
+    return res.json({ success: true, cpuTemp });
+  } catch (err) {
+    console.error('CPU temp read error', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+let conveyorProcess = null;
+
+app.post('/api/conveyor', (req, res) => {
+  const action = req.body?.action;
+  const scriptPath = process.env.CONVEYOR_SCRIPT_PATH || './mango-sorter.py';
+
+  if (action === 'start' || action === 'continue') {
+    if (conveyorProcess) {
+      return res.json({ success: true, message: 'Conveyor already running' });
+    }
+
+    try {
+      conveyorProcess = spawn('python3', [scriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: process.cwd(),
+        detached: true
+      });
+
+      conveyorProcess.stdout.on('data', data => console.log(`[conveyor stdout] ${data}`));
+      conveyorProcess.stderr.on('data', data => console.error(`[conveyor stderr] ${data}`));
+      conveyorProcess.on('close', code => {
+        console.log(`Conveyor script exited with code ${code}`);
+        conveyorProcess = null;
+      });
+
+      return res.json({ success: true, message: 'Conveyor process started' });
+    } catch (err) {
+      console.error('Failed to start conveyor process', err);
+      conveyorProcess = null;
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  if (action === 'stop') {
+    if (!conveyorProcess) {
+      return res.json({ success: true, message: 'Conveyor already stopped' });
+    }
+    try {
+      process.kill(-conveyorProcess.pid, 'SIGTERM');
+      conveyorProcess = null;
+      return res.json({ success: true, message: 'Conveyor process stopped' });
+    } catch (err) {
+      console.error('Failed to stop conveyor process', err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  return res.status(400).json({ success: false, message: 'Invalid action' });
 });
 
 // Basic route
