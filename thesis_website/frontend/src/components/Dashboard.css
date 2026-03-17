@@ -639,7 +639,7 @@ html, body, #root {
   border-radius: 6px;
 }
 
-/* Two-Column Dashboard Layout - 50/50 split */
+/* Two-Column Dashboard Layout - flexible split */
 .dashboard-container {
   display: flex;
   gap: 6px;
@@ -647,11 +647,12 @@ html, body, #root {
   max-width: 100%;
   margin: 4px 4px;
   padding: 0;
-  height: 510px; /* fill available space after header */
+  height: calc(100vh - 72px); /* fill available space after header */
+  min-height: 0;
 }
 
 .dashboard-left {
-  flex: 0 0 50%; /* exactly 50% */
+  flex: 1 1 50%;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -675,6 +676,28 @@ html, body, #root {
   max-width: 1000px;
   margin-top: 12px;
   border: 1px solid rgba(153, 153, 153, 0.2);
+}
+
+.settings-popup-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.settings-popup-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.settings-popup-toggle span {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
 }
 
 .change-password-panel h2,

@@ -24,6 +24,7 @@ function Dashboard({ user, onLogout }) {
   // Flag for the most recent item being defective
   const [isDefective, setIsDefective] = useState(false);
   const [sortingHistory, setSortingHistory] = useState([]);
+  const [showNoMangoPopup, setShowNoMangoPopup] = useState(false);
   // Session and history management
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
@@ -32,13 +33,16 @@ function Dashboard({ user, onLogout }) {
   const [editingName, setEditingName] = useState('');
   const videoRef = useRef(null);
   const [cameraError, setCameraError] = useState(null);
+  const [cameraDevices, setCameraDevices] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const defaultSettings = {
     limitSmall: 100,
     limitMedium: 100,
     limitLarge: 100,
-    limitDefective: 20
+    limitDefective: 20,
+    showNoMangoPopup: true
   };
   const [settings, setSettings] = useState(defaultSettings);
   const [sessionPaused, setSessionPaused] = useState(false);
@@ -194,6 +198,15 @@ function Dashboard({ user, onLogout }) {
         medium: { ...prev.medium, detecting: data.medium },
         large: { ...prev.large, detecting: data.large }
       }));
+
+      // Show no mango popup when all sensors report none for 1 update (if enabled)
+      const anyDetected = data.small || data.medium || data.large || data.defective || data.detectedSize;
+      if (!anyDetected && settings.showNoMangoPopup) {
+        setShowNoMangoPopup(true);
+        setTimeout(() => setShowNoMangoPopup(false), 1600);
+      } else {
+        setShowNoMangoPopup(false);
+      }
 
       // Check if defective
       if (data.defective) {
@@ -378,22 +391,50 @@ function Dashboard({ user, onLogout }) {
   // Attempts getUserMedia and assigns stream to <video> ref
   useEffect(() => {
     let localStream = null;
+
+    const updateDevices = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setCameraDevices(videoInputs);
+
+        if (videoInputs.length > 0) {
+          if (!selectedCameraId || !videoInputs.some(d => d.deviceId === selectedCameraId)) {
+            setSelectedCameraId(videoInputs[0].deviceId);
+          }
+        }
+      } catch (e) {
+        console.error('Cannot enumerate media devices', e);
+      }
+    };
+
     const startCamera = async () => {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           setCameraError('Camera not supported (HTTP doesn\'t allow camera access)');
           return;
         }
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+
+        await updateDevices();
+
+        const constraints = {
+          video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : true,
+          audio: false
+        };
+
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
         if (videoRef.current) videoRef.current.srcObject = localStream;
+        setCameraError(null);
       } catch (err) {
         if (err.name === 'NotAllowedError') {
           setCameraError('Camera access denied (switch to HTTPS for live feed)');
         } else if (err.name === 'NotFoundError') {
-          setCameraError('Camera not found on this device');
+          setCameraError('Camera not found (plug in USB webcam and/or select device).');
         } else {
           setCameraError(err.message || 'Could not access camera');
         }
+        console.error('Camera access error', err);
       }
     };
 
@@ -404,7 +445,7 @@ function Dashboard({ user, onLogout }) {
         localStream.getTracks().forEach(t => t.stop());
       }
     };
-  }, []);
+  }, [selectedCameraId]);
 
   // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
@@ -777,6 +818,16 @@ function Dashboard({ user, onLogout }) {
           </div>
         </div>
       )}
+
+      {showNoMangoPopup && (
+        <div className="tutorial-overlay" onClick={() => setShowNoMangoPopup(false)}>
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => setShowNoMangoPopup(false)}>✕</div>
+            <h3 style={{ color: '#1565c0' }}>No Mangoes Detected</h3>
+            <p>No mangoes are in view of the camera currently. Please check the conveyor and camera alignment.</p>
+          </div>
+        </div>
+      )}
       
       <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
           <div className="menu-inner">
@@ -820,6 +871,29 @@ function Dashboard({ user, onLogout }) {
                 <h2>Live Camera Feed</h2>
               </div>
               <div className="camera-container">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                  <label style={{ fontSize: '13px', color: '#333' }}>Camera:</label>
+                  <select
+                    value={selectedCameraId}
+                    onChange={e => setSelectedCameraId(e.target.value)}
+                    style={{ padding: '4px 8px', fontSize: '13px' }}
+                  >
+                    <option value="">Default</option>
+                    {cameraDevices.map(dev => (
+                      <option key={dev.deviceId} value={dev.deviceId}>{dev.label || `Camera ${dev.deviceId.slice(-4)}`}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCameraError(null);
+                      setSelectedCameraId(prev => prev); // re-trigger effect
+                    }}
+                    style={{ padding: '4px 9px', fontSize: '12px', marginLeft: '6px' }}
+                  >
+                    Restart
+                  </button>
+                </div>
                 {cameraError ? (
                   <div className="camera-placeholder">
                     <p><strong>Camera Unavailable</strong></p>
@@ -983,6 +1057,14 @@ function Dashboard({ user, onLogout }) {
                 <label>
                   Defective mango limit:
                   <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
+                </label>
+                <label className="settings-popup-toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.showNoMangoPopup}
+                    onChange={e => setSettings(s => ({ ...s, showNoMangoPopup: e.target.checked }))}
+                  />
+                  <span>Show "No Mangoes Detected" popup</span>
                 </label>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
