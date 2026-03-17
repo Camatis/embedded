@@ -42,7 +42,9 @@ function Dashboard({ user, onLogout }) {
     limitMedium: 100,
     limitLarge: 100,
     limitDefective: 20,
-    showNoMangoPopup: true
+    showNoMangoPopup: true,
+    enablePiStream: false,
+    piStreamUrl: ''
   };
   const [settings, setSettings] = useState(defaultSettings);
   const [sessionPaused, setSessionPaused] = useState(false);
@@ -392,6 +394,15 @@ function Dashboard({ user, onLogout }) {
   useEffect(() => {
     let localStream = null;
 
+    if (settings.enablePiStream && settings.piStreamUrl) {
+      // using external Pi stream URL (not getUserMedia) - skip getUserMedia
+      setCameraError(null);
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      return;
+    }
+
     const updateDevices = async () => {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
@@ -399,10 +410,8 @@ function Dashboard({ user, onLogout }) {
         const videoInputs = devices.filter(d => d.kind === 'videoinput');
         setCameraDevices(videoInputs);
 
-        if (videoInputs.length > 0) {
-          if (!selectedCameraId || !videoInputs.some(d => d.deviceId === selectedCameraId)) {
-            setSelectedCameraId(videoInputs[0].deviceId);
-          }
+        if (videoInputs.length > 0 && !selectedCameraId) {
+          setSelectedCameraId(videoInputs[0].deviceId);
         }
       } catch (e) {
         console.error('Cannot enumerate media devices', e);
@@ -430,7 +439,7 @@ function Dashboard({ user, onLogout }) {
         if (err.name === 'NotAllowedError') {
           setCameraError('Camera access denied (switch to HTTPS for live feed)');
         } else if (err.name === 'NotFoundError') {
-          setCameraError('Camera not found (plug in USB webcam and/or select device).');
+          setCameraError('Camera not found (for Pi module: run `sudo modprobe bcm2835-v4l2` or use libcamera to create /dev/video0).');
         } else {
           setCameraError(err.message || 'Could not access camera');
         }
@@ -445,7 +454,7 @@ function Dashboard({ user, onLogout }) {
         localStream.getTracks().forEach(t => t.stop());
       }
     };
-  }, [selectedCameraId]);
+  }, [selectedCameraId, settings.enablePiStream, settings.piStreamUrl]);
 
   // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
@@ -842,6 +851,7 @@ function Dashboard({ user, onLogout }) {
               <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
               <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
               <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
+              <button type="button" onClick={() => { setCurrentView('camera-config'); setMenuOpen(false); }} className={`menu-item ${currentView === 'camera-config' ? 'active' : ''}`}>Camera Configuration</button>
               <button type="button" onClick={() => { setCurrentView('change-password'); setMenuOpen(false); }} className={`menu-item ${currentView === 'change-password' ? 'active' : ''}`}>Change Password</button>
               <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
             </nav>
@@ -871,30 +881,11 @@ function Dashboard({ user, onLogout }) {
                 <h2>Live Camera Feed</h2>
               </div>
               <div className="camera-container">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-                  <label style={{ fontSize: '13px', color: '#333' }}>Camera:</label>
-                  <select
-                    value={selectedCameraId}
-                    onChange={e => setSelectedCameraId(e.target.value)}
-                    style={{ padding: '4px 8px', fontSize: '13px' }}
-                  >
-                    <option value="">Default</option>
-                    {cameraDevices.map(dev => (
-                      <option key={dev.deviceId} value={dev.deviceId}>{dev.label || `Camera ${dev.deviceId.slice(-4)}`}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCameraError(null);
-                      setSelectedCameraId(prev => prev); // re-trigger effect
-                    }}
-                    style={{ padding: '4px 9px', fontSize: '12px', marginLeft: '6px' }}
-                  >
-                    Restart
-                  </button>
-                </div>
-                {cameraError ? (
+                {settings.enablePiStream && settings.piStreamUrl ? (
+                  <div style={{ position:'relative', width:'100%', height:'250px', background:'#000' }}>
+                    <img src={settings.piStreamUrl} alt="Pi camera stream" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                  </div>
+                ) : cameraError ? (
                   <div className="camera-placeholder">
                     <p><strong>Camera Unavailable</strong></p>
                     <p style={{fontSize: '12px', marginTop: '8px'}}>{cameraError}</p>
@@ -1041,37 +1032,42 @@ function Dashboard({ user, onLogout }) {
             {/* Settings View */}
             <div className="settings-panel">
               <h2>Settings</h2>
-              <div className="settings-grid">
-                <label>
-                  Small mango limit:
-                  <input type="number" min="0" value={settings.limitSmall} onChange={e => setSettings(s => ({ ...s, limitSmall: Number(e.target.value) }))} />
-                </label>
-                <label>
-                  Medium mango limit:
-                  <input type="number" min="0" value={settings.limitMedium} onChange={e => setSettings(s => ({ ...s, limitMedium: Number(e.target.value) }))} />
-                </label>
-                <label>
-                  Large mango limit:
-                  <input type="number" min="0" value={settings.limitLarge} onChange={e => setSettings(s => ({ ...s, limitLarge: Number(e.target.value) }))} />
-                </label>
-                <label>
-                  Defective mango limit:
-                  <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
-                </label>
-                <label className="settings-popup-toggle">
+
+              <div className="settings-section">
+                <h3>Mango Detection</h3>
+                <div className="settings-grid">
+                  <label>
+                    Small mango limit:
+                    <input type="number" min="0" value={settings.limitSmall} onChange={e => setSettings(s => ({ ...s, limitSmall: Number(e.target.value) }))} />
+                  </label>
+                  <label>
+                    Medium mango limit:
+                    <input type="number" min="0" value={settings.limitMedium} onChange={e => setSettings(s => ({ ...s, limitMedium: Number(e.target.value) }))} />
+                  </label>
+                  <label>
+                    Large mango limit:
+                    <input type="number" min="0" value={settings.limitLarge} onChange={e => setSettings(s => ({ ...s, limitLarge: Number(e.target.value) }))} />
+                  </label>
+                  <label>
+                    Defective mango limit:
+                    <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
+                  </label>
+                </div>
+                <div className="settings-popup-toggle">
                   <input
                     type="checkbox"
                     checked={settings.showNoMangoPopup}
                     onChange={e => setSettings(s => ({ ...s, showNoMangoPopup: e.target.checked }))}
                   />
                   <span>Show "No Mangoes Detected" popup</span>
-                </label>
+                </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
-                <button type="button" className="control-button start-button" style={{ width: '175px' }} onClick={() => setPasswordMessage('Settings saved')}>
-                  Save Limits
+
+              <div className="settings-actions">
+                <button type="button" className="control-button start-button" onClick={() => setPasswordMessage('Settings saved')}>
+                  Save Settings
                 </button>
-                <button type="button" className="control-button stop-button" style={{ width: '175px', backgroundColor: '#9e9e9e' }} onClick={() => {
+                <button type="button" className="control-button stop-button" onClick={() => {
                   setSettings(defaultSettings);
                   setPasswordMessage('Settings reset to defaults');
                 }}>
@@ -1079,6 +1075,58 @@ function Dashboard({ user, onLogout }) {
                 </button>
               </div>
               <p className="hint">These limits automatically stop the batch when reached.</p>
+            </div>
+          </>
+        ) : currentView === 'camera-config' ? (
+          <>
+            <div className="settings-panel">
+              <h2>Camera Configuration</h2>
+              <div className="settings-section">
+                <div className="settings-popup-toggle" style={{ marginBottom: '12px' }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.enablePiStream}
+                    onChange={e => setSettings(s => ({ ...s, enablePiStream: e.target.checked }))}
+                  />
+                  <span>Use Pi camera stream URL</span>
+                </div>
+                <label>
+                  Pi stream URL:
+                  <input
+                    type="text"
+                    value={settings.piStreamUrl}
+                    onChange={e => setSettings(s => ({ ...s, piStreamUrl: e.target.value }))}
+                    placeholder="http://<raspberrypi-ip>:8080/stream"
+                  />
+                </label>
+                <label>
+                  Camera device:
+                  <select
+                    value={selectedCameraId}
+                    onChange={e => setSelectedCameraId(e.target.value)}
+                    disabled={settings.enablePiStream}
+                  >
+                    <option value="">Default</option>
+                    {cameraDevices.map(dev => (
+                      <option key={dev.deviceId} value={dev.deviceId}>{dev.label || `Camera ${dev.deviceId.slice(-4)}`}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCameraError(null);
+                    setSelectedCameraId(prev => prev);
+                    if (settings.enablePiStream && settings.piStreamUrl) {
+                      setCameraError(`Using Pi stream URL: ${settings.piStreamUrl}`);
+                    }
+                  }}
+                  className="control-button start-button"
+                  style={{ width: '175px', marginTop: '12px' }}
+                >
+                  Restart Camera
+                </button>
+              </div>
             </div>
           </>
         ) : (

@@ -311,38 +311,53 @@ app.post('/api/sensor-data', (req, res) => {
   }
 });
 
-// GET: Return latest sensor data for frontend polling and clear it
+// Returns latest sensor data for frontend polling and clear it
 app.get('/api/sensor-data', (req, res) => {
   const data = lastSensorData;
   lastSensorData = null;  // Clear after reading to prevent duplicates
   res.json(data || {});
 });
 
-// POST: Clear sensor data (called when batch stops)
+// Clears sensor data (called when batch stops)
 app.post('/api/clear-sensor-data', (req, res) => {
   lastSensorData = null;
   res.json({ success: true, message: 'Sensor data cleared' });
 });
 
-// GET: CPU temp for RPi (requires running on RPi)
+// Get CPU temp for RPi (requires running on RPi)
 app.get('/api/cpu-temp', async (req, res) => {
   try {
-    let cpuTemp = null;
-    if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
-      const raw = fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8').trim();
-      cpuTemp = Number(raw) / 1000;
-    } else {
-      // fallback for Linux if sysfs not present
-      const exec = require('child_process').exec;
-      exec("cat /proc/cpuinfo | grep 'model name'", (err, stdout) => {
-        if (err) {
-          return res.status(500).json({ success: false, message: 'Cannot read CPU temperature' });
+    const exec = require('child_process').exec;
+
+    const parseTemp = text => {
+      if (!text) return null;
+      const match = text.match(/([0-9]+\.[0-9]+)/);
+      if (match) return Number(match[1]);
+      const intMatch = text.match(/([0-9]+)/);
+      return intMatch ? Number(intMatch[1]) : null;
+    };
+
+    exec('vcgencmd measure_temp', (err, stdout) => {
+      if (!err && stdout) {
+        const value = parseTemp(stdout);
+        if (value !== null) {
+          return res.json({ success: true, cpuTemp: value, source: 'vcgencmd', raw: stdout.trim() });
         }
-        return res.json({ success: true, cpuTemp: null, message: 'Temperature source not found' });
-      });
-      return;
-    }
-    return res.json({ success: true, cpuTemp });
+      }
+
+      // Fallback to /sys/class/thermal
+      try {
+        if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
+          const raw = fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8').trim();
+          const value = Number(raw) / 1000;
+          return res.json({ success: true, cpuTemp: value, source: 'sysfs', raw });
+        }
+      } catch (innerErr) {
+        console.error('CPU sysfs read error', innerErr);
+      }
+
+      return res.status(500).json({ success: false, message: 'Cannot read CPU temperature', error: err?.message || 'unknown' });
+    });
   } catch (err) {
     console.error('CPU temp read error', err);
     return res.status(500).json({ success: false, message: err.message });
