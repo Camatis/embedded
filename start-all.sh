@@ -10,7 +10,7 @@ echo "Starting Mango Sorter System..."
 
 # Start Backend (Node.js)
 echo "Starting Backend..."
-cd /home/thesis/thesis_website/backend
+cd /home/thesis/embedded/thesis_website/backend
 npm install > /dev/null 2>&1
 npm start > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
@@ -21,7 +21,7 @@ sleep 3
 
 # Start Frontend (React)
 echo "Starting Frontend..."
-cd /home/thesis/thesis_website/frontend
+cd /home/thesis/embedded/thesis_website/frontend
 npm install > /dev/null 2>&1
 GENERATE_SOURCEMAP=false npm start > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
@@ -32,13 +32,13 @@ sleep 5
 
 # Start Temperature Monitor
 echo "Starting Temperature Monitor..."
-python3 /home/thesis/temp_monitor.py > /tmp/temp_monitor.log 2>&1 &
+python3 /home/thesis/embedded/temp_monitor.py > /tmp/temp_monitor.log 2>&1 &
 TEMP_MONITOR_PID=$!
 echo "   Temp Monitor PID: $TEMP_MONITOR_PID"
 
 # Start Camera Stream (WebRTC)
 echo "Starting Camera Stream..."
-python3 /home/thesis/cam_stream.py > /tmp/cam_stream.log 2>&1 &
+python3 /home/thesis/embedded/cam_stream.py > /tmp/cam_stream.log 2>&1 &
 CAM_STREAM_PID=$!
 echo "   Cam Stream PID: $CAM_STREAM_PID"
 
