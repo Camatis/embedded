@@ -35,6 +35,8 @@ function Dashboard({ user, onLogout }) {
   const [cameraError, setCameraError] = useState(null);
   const [cameraDevices, setCameraDevices] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [webrtcStatus, setWebrtcStatus] = useState('idle');
+  const pcRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const defaultSettings = {
@@ -77,8 +79,8 @@ function Dashboard({ user, onLogout }) {
       body: 'Inside the menu bar, open the Batch History tab to review past runs. Here, you can view the total counts for previous batches and rename them for better organization.'
     },
     {
-      title: 'Sensor Status',
-      body: 'Ensure your hardware is running smoothly. Click the Sensor Status tab in the menu bar to verify that every single sensor is online and working correctly.'
+      title: 'Hardware Status',
+      body: 'Ensure your hardware is running smoothly. Click the Hardware Status tab in the menu bar to verify that every single sensor is online and working correctly.'
     }
   ];
   const openTutorial = () => setShowTutorial(true);
@@ -389,74 +391,67 @@ function Dashboard({ user, onLogout }) {
     return () => clearInterval(intervalId);
   }, [stopSessionImmediately]);
 
-  // Start and manage webcam stream for live preview
-  // Attempts getUserMedia and assigns stream to <video> ref
+  // Start and manage webcam stream for live preview via WebRTC
   useEffect(() => {
-    let localStream = null;
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+    pcRef.current = pc;
 
-    if (settings.enablePiStream && settings.piStreamUrl) {
-      // using external Pi stream URL (not getUserMedia) - skip getUserMedia
-      setCameraError(null);
+    setWebrtcStatus('connecting');
+
+    pc.ontrack = (event) => {
       if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-      return;
-    }
-
-    const updateDevices = async () => {
-      try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        setCameraDevices(videoInputs);
-
-        if (videoInputs.length > 0 && !selectedCameraId) {
-          setSelectedCameraId(videoInputs[0].deviceId);
-        }
-      } catch (e) {
-        console.error('Cannot enumerate media devices', e);
+        videoRef.current.srcObject = event.streams[0];
       }
     };
 
-    const startCamera = async () => {
+    pc.oniceconnectionstatechange = () => {
+      setWebrtcStatus(pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        setCameraError('WebRTC connection failed. Please make sure cam_stream.py is running on Pi.');
+      }
+    };
+
+    const startWebrtc = async () => {
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          setCameraError('Camera not supported (HTTP doesn\'t allow camera access)');
-          return;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const response = await fetch('/api/webrtc-offer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Offer failed: ${response.status} ${text}`);
         }
 
-        await updateDevices();
+        const answer = await response.json();
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
 
-        const constraints = {
-          video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : true,
-          audio: false
-        };
-
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        if (videoRef.current) videoRef.current.srcObject = localStream;
         setCameraError(null);
+        setWebrtcStatus('connected');
       } catch (err) {
-        if (err.name === 'NotAllowedError') {
-          setCameraError('Camera access denied (switch to HTTPS for live feed)');
-        } else if (err.name === 'NotFoundError') {
-          setCameraError('Camera not found (for Pi module: run `sudo modprobe bcm2835-v4l2` or use libcamera to create /dev/video0).');
-        } else {
-          setCameraError(err.message || 'Could not access camera');
-        }
-        console.error('Camera access error', err);
+        console.error('WebRTC setup failed', err);
+        setCameraError(err.message || 'WebRTC setup failed');
+        setWebrtcStatus('error');
       }
     };
 
-    startCamera();
+    startWebrtc();
 
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
       }
     };
-  }, [selectedCameraId, settings.enablePiStream, settings.piStreamUrl]);
+  }, []);
 
-  // Fetch session list from backend (used for Batch History)
+    // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
@@ -851,7 +846,6 @@ function Dashboard({ user, onLogout }) {
               <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
               <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
               <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
-              <button type="button" onClick={() => { setCurrentView('camera-config'); setMenuOpen(false); }} className={`menu-item ${currentView === 'camera-config' ? 'active' : ''}`}>Camera Configuration</button>
               <button type="button" onClick={() => { setCurrentView('change-password'); setMenuOpen(false); }} className={`menu-item ${currentView === 'change-password' ? 'active' : ''}`}>Change Password</button>
               <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
             </nav>
@@ -881,23 +875,19 @@ function Dashboard({ user, onLogout }) {
                 <h2>Live Camera Feed</h2>
               </div>
               <div className="camera-container">
-                {settings.enablePiStream && settings.piStreamUrl ? (
-                  <div style={{ position:'relative', width:'100%', height:'250px', background:'#000' }}>
-                    <img src={settings.piStreamUrl} alt="Pi camera stream" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-                  </div>
-                ) : cameraError ? (
+                {cameraError ? (
                   <div className="camera-placeholder">
                     <p><strong>Camera Unavailable</strong></p>
                     <p style={{fontSize: '12px', marginTop: '8px'}}>{cameraError}</p>
                     <p style={{fontSize: '12px', marginTop: '12px', color: '#666'}}>
-                      On Pi, any connected USB webcam should work. Reconnect camera if needed.
-                      Chrome requires HTTPS for camera on remote hosts; localhost is allowed over HTTP.
+                      Make sure `cam_stream.py` is running on Raspberry Pi and that backend route `/api/webrtc-offer` is available.
                     </p>
                   </div>
                 ) : (
                   <video ref={videoRef} className="camera-video" autoPlay playsInline muted />
                 )}
               </div>
+              <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>WebRTC status: {webrtcStatus}</p>
             </div>
 
             <div className="system-controls">
@@ -1075,58 +1065,6 @@ function Dashboard({ user, onLogout }) {
                 </button>
               </div>
               <p className="hint">These limits automatically stop the batch when reached.</p>
-            </div>
-          </>
-        ) : currentView === 'camera-config' ? (
-          <>
-            <div className="settings-panel">
-              <h2>Camera Configuration</h2>
-              <div className="settings-section">
-                <div className="settings-popup-toggle" style={{ marginBottom: '12px' }}>
-                  <input
-                    type="checkbox"
-                    checked={settings.enablePiStream}
-                    onChange={e => setSettings(s => ({ ...s, enablePiStream: e.target.checked }))}
-                  />
-                  <span>Use Pi camera stream URL</span>
-                </div>
-                <label>
-                  Pi stream URL:
-                  <input
-                    type="text"
-                    value={settings.piStreamUrl}
-                    onChange={e => setSettings(s => ({ ...s, piStreamUrl: e.target.value }))}
-                    placeholder="http://<raspberrypi-ip>:8080/stream"
-                  />
-                </label>
-                <label>
-                  Camera device:
-                  <select
-                    value={selectedCameraId}
-                    onChange={e => setSelectedCameraId(e.target.value)}
-                    disabled={settings.enablePiStream}
-                  >
-                    <option value="">Default</option>
-                    {cameraDevices.map(dev => (
-                      <option key={dev.deviceId} value={dev.deviceId}>{dev.label || `Camera ${dev.deviceId.slice(-4)}`}</option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCameraError(null);
-                    setSelectedCameraId(prev => prev);
-                    if (settings.enablePiStream && settings.piStreamUrl) {
-                      setCameraError(`Using Pi stream URL: ${settings.piStreamUrl}`);
-                    }
-                  }}
-                  className="control-button start-button"
-                  style={{ width: '175px', marginTop: '12px' }}
-                >
-                  Restart Camera
-                </button>
-              </div>
             </div>
           </>
         ) : (

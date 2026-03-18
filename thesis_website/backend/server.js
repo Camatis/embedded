@@ -364,6 +364,49 @@ app.get('/api/cpu-temp', async (req, res) => {
   }
 });
 
+// Optional proxy route to remote RPi temperature monitor service (temp_monitor.py)
+// Set RPI_TEMP_MONITOR_URL in env like http://raspberrypi:5800
+app.get('/api/rpi-cpu-temp', async (req, res) => {
+  const remoteUrl = process.env.RPI_TEMP_MONITOR_URL || 'http://127.0.0.1:5800/temp';
+  try {
+    const useFetch = typeof fetch === 'function' ? fetch : require('node-fetch');
+    const response = await useFetch(remoteUrl, { timeout: 5000 });
+    if (!response.ok) {
+      return res.status(response.status).json({ success: false, message: `Remote status ${response.status}` });
+    }
+    const body = await response.json();
+    return res.json({ success: true, source: remoteUrl, data: body });
+  } catch (err) {
+    console.error('Failed remote RPi temp fetch', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Proxy the WebRTC offer for RPi cam stream
+app.post('/api/webrtc-offer', async (req, res) => {
+  const remoteUrl = process.env.RPI_WEbrtc_URL || 'http://127.0.0.1:8081/offer';
+  try {
+    const useFetch = typeof fetch === 'function' ? fetch : require('node-fetch');
+    const response = await useFetch(remoteUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      timeout: 10000
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({ success: false, message: text });
+    }
+
+    const data = await response.json();
+    return res.json(data);
+  } catch (err) {
+    console.error('Failed to forward WebRTC offer', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 let conveyorProcess = null;
 
 app.post('/api/conveyor', (req, res) => {
