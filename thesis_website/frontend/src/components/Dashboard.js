@@ -511,7 +511,23 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
-  const exportSortingHistory = () => {
+  const loadImageDataUrl = (src) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = (err) => reject(err);
+      img.src = src;
+    });
+
+  const exportSortingHistory = async () => {
     if (!sessions || sessions.length === 0) {
       alert('No sessions to export');
       return;
@@ -520,90 +536,140 @@ function Dashboard({ user, onLogout }) {
     try {
       const doc = new jsPDF('landscape');
       const margin = 18;
-      let y = 18;
+      let y = 28;
 
-      doc.setTextColor('#2b2b2b');
+      // App gradient style from AuthStyles (header and subheader gradient bands)
+      doc.setFillColor(253, 184, 19);
+      doc.rect(0, 0, 297, 10, 'F');
+      doc.setFillColor(253, 141, 19);
+      doc.rect(0, 10, 297, 8, 'F');
+      doc.setFillColor(107, 168, 47);
+      doc.rect(0, 18, 297, 8, 'F');
+
+      // Add login logo from public asset
+      try {
+        const logoDataUrl = await loadImageDataUrl('/login.png');
+        doc.addImage(logoDataUrl, 'PNG', 250, 8, 34, 34);
+      } catch (imgErr) {
+        console.warn('Logo image load failed; fallback to icon.', imgErr);
+        doc.setFillColor(255, 215, 0);
+        doc.circle(268, 19, 8, 'F');
+      }
+
+      doc.setTextColor('#011627');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(18);
-      doc.text('Mango Sorter Batch History', margin, y);
-
-      y += 10;
+      doc.setFontSize(16);
+      doc.text('AUTOMATED MANGO SORTING SYSTEM', margin, 15);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'normal');
-      doc.text(`Generated: ${new Date().toLocaleString()}`, margin, y);
-      y += 8;
-      doc.text(`Total batches: ${sessions.length}`, margin, y);
+      doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
+
+      // Place metadata below header
+      y = 44;
+      const username = user?.username || 'vince@email.com';
+      const today = new Date();
+      doc.setTextColor('#011627');
+      doc.setFontSize(10);
+      doc.text(`Operator: ${username}`, margin, y);
+      y += 6;
+      doc.text(`Date of Export: ${today.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}`, margin, y);
+      y += 6;
+      doc.text('System Version: AI Vision Model v1.0 (YOLO)', margin, y);
 
       y += 12;
-      const headers = ['Batch', 'Small', 'Medium', 'Large', 'Defective', 'Total', 'Start Time', 'End Time'];
-      const colW = [30, 20, 20, 20, 25, 20, 40, 40];
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.text('1. EXECUTIVE SUMMARY', margin, y);
+      y += 6;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+
+      const totalBatches = sessions.length;
+      const totalSmall = sessions.reduce((acc, s) => acc + (s.counts?.small || 0), 0);
+      const totalMedium = sessions.reduce((acc, s) => acc + (s.counts?.medium || 0), 0);
+      const totalLarge = sessions.reduce((acc, s) => acc + (s.counts?.large || 0), 0);
+      const totalDefective = sessions.reduce((acc, s) => acc + (s.counts?.defective || 0), 0);
+      const totalProcessed = sessions.reduce((acc, s) => acc + ((s.counts?.small||0) + (s.counts?.medium||0) + (s.counts?.large||0) + (s.counts?.defective||0)), 0);
+      const totalPass = totalProcessed - totalDefective;
+      const passRate = totalProcessed ? ((totalPass / totalProcessed) * 100).toFixed(1) : '0.0';
+      const rejectRate = totalProcessed ? ((totalDefective / totalProcessed) * 100).toFixed(1) : '0.0';
+
+      doc.text(`Total Batches Analyzed: ${totalBatches}`, margin, y); y += 6;
+      doc.text(`Total Mangoes Processed: ${totalProcessed}`, margin, y); y += 6;
+      doc.text(`Overall System Yield: ${passRate}% Pass / ${rejectRate}% Reject`, margin, y);
+
+      y += 12;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.text('2. BATCH BREAKDOWN', margin, y);
+
+      y += 8;
+      const headers = ['Batch Name', 'Start Time', 'End Time', 'Small', 'Medium', 'Large', 'Defective', 'Total', 'Pass Rate'];
+      const colW = [38, 28, 28, 18, 18, 18, 20, 18, 24];
+      const tableWidth = colW.reduce((a, b) => a + b, 0);
       let x = margin;
 
+      // Header background
+      doc.setFillColor(230, 230, 230);
+      doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
+
+      doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
+      doc.setTextColor('#1a1a1a');
       headers.forEach((heading, i) => {
         doc.text(heading, x, y);
         x += colW[i];
       });
 
-      y += 8;
+      y += 7;
       doc.setFont('helvetica', 'normal');
-
-      let totals = { small: 0, medium: 0, large: 0, defective: 0, total: 0 };
+      doc.setFontSize(9);
 
       sessions.forEach((s, idx) => {
-        if (y > 265) {
+        if (y > 270) {
           doc.addPage();
-          y = 20;
+          y = 18;
+          // repeat header on new page
+          x = margin;
+          doc.setFillColor(230, 230, 230);
+          doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
+          doc.setFont('helvetica', 'bold');
+          headers.forEach((heading, i) => {
+            doc.text(heading, x, y);
+            x += colW[i];
+          });
+          y += 7;
+          doc.setFont('helvetica', 'normal');
+          x = margin;
+        }
+
+        // alternating row stripes
+        if (idx % 2 === 0) {
+          doc.setFillColor(245, 245, 255);
+          doc.rect(margin - 2, y - 4.5, tableWidth + 4, 7.5, 'F');
         }
 
         x = margin;
-        const start = s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-';
-        const end = s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-';
-        const row = [
-          s.session_name || `Batch ${idx + 1}`,
-          s.counts?.small ?? 0,
-          s.counts?.medium ?? 0,
-          s.counts?.large ?? 0,
-          s.counts?.defective ?? 0,
-          s.counts?.total ?? 0,
-          start,
-          end
-        ];
+        const start = s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }) : '-';
+        const end = s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }) : '-';
+        const small = s.counts?.small || 0;
+        const medium = s.counts?.medium || 0;
+        const large = s.counts?.large || 0;
+        const defective = s.counts?.defective || 0;
+        const total = small + medium + large + defective;
+        const passRateLine = total ? `${(((total - defective) / total) * 100).toFixed(1)}%` : '0.0%';
 
-        totals.small += row[1];
-        totals.medium += row[2];
-        totals.large += row[3];
-        totals.defective += row[4];
-        totals.total += row[5];
-
+        const row = [s.session_name || `Batch ${idx + 1}`, start, end, small, medium, large, defective, total, passRateLine];
         row.forEach((cell, i) => {
-          const value = String(cell);
-          doc.text(value, x, y);
+          doc.text(String(cell), x, y);
           x += colW[i];
         });
+
         y += 7;
       });
 
-      if (y + 18 < 285) {
-        y += 10;
-      } else {
-        doc.addPage();
-        y = 20;
-      }
-
-      doc.setFont('helvetica', 'bold');
-      doc.text('Totals', margin, y);
-      doc.setFont('helvetica', 'normal');
-      doc.text(String(totals.small), margin + colW[0], y);
-      doc.text(String(totals.medium), margin + colW[0] + colW[1], y);
-      doc.text(String(totals.large), margin + colW[0] + colW[1] + colW[2], y);
-      doc.text(String(totals.defective), margin + colW[0] + colW[1] + colW[2] + colW[3], y);
-      doc.text(String(totals.total), margin + colW[0] + colW[1] + colW[2] + colW[3] + colW[4], y);
-
       const fileName = `batch_history_export_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`;
       doc.save(fileName);
-
       return;
     } catch (err) {
       console.error('PDF export failed, check jsPDF installation:', err);
