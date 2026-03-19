@@ -6,10 +6,88 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const https = require('https');
 const fs = require('fs');
+const path = require('path');
 const { spawn } = require('child_process');
 require('dotenv').config();
 
 const app = express();
+
+// Offline-first constants
+const LOCAL_DATA_DIR = process.env.LOCAL_DATA_DIR || path.join(__dirname, '..', 'local_data');
+const USER_SHADOW_FILE = path.join(LOCAL_DATA_DIR, 'users_shadow.json');
+const UNSYNCED_BATCH_DIR = path.join(LOCAL_DATA_DIR, 'unsynced_batches');
+const MASTER_ADMIN_USERNAME = process.env.MASTER_ADMIN_USERNAME || 'admin';
+const MASTER_ADMIN_PASSWORD_HASH = process.env.MASTER_ADMIN_PASSWORD_HASH || '$2b$10$BEKdhn6qQVuheUG6l2fR6.H.1Xgi7evgKiaTgB8Mzu8vFe9fl73Hq'; // strongpassword
+
+function ensureLocalDirs() {
+  if (!fs.existsSync(LOCAL_DATA_DIR)) fs.mkdirSync(LOCAL_DATA_DIR, { recursive: true });
+  if (!fs.existsSync(UNSYNCED_BATCH_DIR)) fs.mkdirSync(UNSYNCED_BATCH_DIR, { recursive: true });
+  if (!fs.existsSync(USER_SHADOW_FILE)) fs.writeFileSync(USER_SHADOW_FILE, JSON.stringify({}), 'utf8');
+}
+
+function loadShadowUsers() {
+  try {
+    const text = fs.readFileSync(USER_SHADOW_FILE, 'utf8');
+    return JSON.parse(text || '{}');
+  } catch (e) {
+    console.error('Failed to load shadow users', e);
+    return {};
+  }
+}
+
+function saveShadowUsers(users) {
+  try {
+    fs.writeFileSync(USER_SHADOW_FILE, JSON.stringify(users, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to save shadow users', e);
+  }
+}
+
+function upsertShadowUser(user) {
+  const users = loadShadowUsers();
+  users[user.username] = { password: user.password, role: user.role || 'user', updatedAt: new Date().toISOString() };
+  saveShadowUsers(users);
+}
+
+async function checkInternet() {
+  try {
+    const response = await fetch('https://www.google.com/generate_204', { timeout: 3000 });
+    return response.status === 204;
+  } catch (err) {
+    return false;
+  }
+}
+
+async function enqueueBatch(batch) {
+  const localId = batch._id || `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const sessionToSave = { ...batch, _id: localId };
+  const name = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.json`;
+  const filePath = path.join(UNSYNCED_BATCH_DIR, name);
+  fs.writeFileSync(filePath, JSON.stringify(sessionToSave, null, 2), 'utf8');
+  return sessionToSave;
+}
+
+async function syncUnsyncedBatches() {
+  if (!await checkInternet()) return;
+
+  const files = fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'));
+  for (const file of files) {
+    const filePath = path.join(UNSYNCED_BATCH_DIR, file);
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const batch = JSON.parse(raw);
+      const session = new Session(batch);
+      await session.save();
+      fs.unlinkSync(filePath);
+      console.log(`Synced offline batch ${file}`);
+    } catch (err) {
+      console.error('Failed to sync batch', file, err);
+    }
+  }
+}
+
+ensureLocalDirs();
+setInterval(syncUnsyncedBatches, 60_000);
 
 // Middleware
 app.use(cors());
@@ -92,6 +170,9 @@ app.post('/api/auth/signup', async (req, res) => {
 
     await user.save();
 
+    // Mirror user in offline shadow db
+    upsertShadowUser({ username, password: hashedPassword, role: role || 'user' });
+
     // Generate token
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
 
@@ -101,26 +182,67 @@ app.post('/api/auth/signup', async (req, res) => {
       user: { id: user._id, username: user.username, role: user.role }
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    // create local-only user in offline mode
+    console.error('Signup cloud failed, saving locally:', err.message);
+    const offlineUser = {
+      username,
+      password: await bcrypt.hash(password, 10),
+      role: role || 'user'
+    };
+    upsertShadowUser(offlineUser);
+    const token = jwt.sign({ userId: `offline-${username}` }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
+    res.status(201).json({ 
+      message: 'User created locally (offline mode)', 
+      token,
+      user: { id: null, username: offlineUser.username, role: offlineUser.role }
+    });
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
+  const { username, password } = req.body || {};
 
-    console.log('Login attempt with:', { username, password: password ? '***' : 'empty' });
+  console.log('Login attempt with:', { username, password: password ? '***' : 'empty' });
 
-    // Check if username and password are provided
-    if (!username || !password) {
-      console.log('Missing credentials');
-      return res.status(400).json({ message: 'Username and password are required' });
+  // Check if username and password are provided
+  if (!username || !password) {
+    console.log('Missing credentials');
+    return res.status(400).json({ message: 'Username and password are required' });
+  }
+
+  const checkShadowOrMaster = async () => {
+    const shadowUsers = loadShadowUsers();
+    const shadow = shadowUsers[username];
+    if (shadow && await bcrypt.compare(password, shadow.password)) {
+      return {
+        message: 'Login successful (offline shadow user)',
+        token: jwt.sign({ userId: `offline-${username}` }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' }),
+        user: { id: null, username, role: shadow.role || 'user' }
+      };
     }
 
-    // Find user
+    if (username === MASTER_ADMIN_USERNAME && await bcrypt.compare(password, MASTER_ADMIN_PASSWORD_HASH)) {
+      return {
+        message: 'Login successful (master admin fallback)',
+        token: jwt.sign({ userId: 'master-admin' }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' }),
+        user: { id: null, username: MASTER_ADMIN_USERNAME, role: 'admin' }
+      };
+    }
+
+    return null;
+  };
+
+  // Try offline immediately so `admin/strongpassword` works without Mongo
+  const fallbackResponse = await checkShadowOrMaster();
+  if (fallbackResponse) {
+    return res.json(fallbackResponse);
+  }
+
+  try {
+    // Find user in cloud
     const user = await User.findOne({ username });
     console.log('User found:', user ? 'yes' : 'no');
-    
+
     if (!user) {
       return res.status(400).json({ message: 'Invalid username or password' });
     }
@@ -136,18 +258,45 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid username or password' });
     }
 
+    // Mirror user to offline shadow on login success
+    upsertShadowUser({ username: user.username, password: user.password, role: user.role });
+
     // Generate token
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
 
     console.log('Login successful for user:', username);
-    res.json({ 
+    return res.json({ 
       message: 'Login successful',
       token,
       user: { id: user._id, username: user.username, role: user.role }
     });
   } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({ message: err.message });
+    console.error('Login error (cloud path):', err.message || err);
+    // Offline fallback: check the shadow user file
+    const shadowUsers = loadShadowUsers();
+    const shadow = shadowUsers[username];
+
+    if (shadow) {
+      const ok = await bcrypt.compare(password, shadow.password);
+      if (ok) {
+        return res.json({
+          message: 'Login successful (offline shadow user)',
+          token: jwt.sign({ userId: `offline-${username}` }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' }),
+          user: { id: null, username, role: shadow.role || 'user' }
+        });
+      }
+    }
+
+    // Master admin fallback
+    if (username === MASTER_ADMIN_USERNAME && await bcrypt.compare(password, MASTER_ADMIN_PASSWORD_HASH)) {
+      return res.json({
+        message: 'Login successful (master admin offline)',
+        token: jwt.sign({ userId: 'master-admin' }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' }),
+        user: { id: null, username: MASTER_ADMIN_USERNAME, role: 'admin' }
+      });
+    }
+
+    res.status(500).json({ message: 'Login failed and offline fallback did not authenticate' });
   }
 });
 
@@ -171,7 +320,20 @@ const verifyToken = (req, res, next) => {
 // Protected route - Get current user
 app.get('/api/auth/me', verifyToken, async (req, res) => {
   try {
+    // Local-only/ fallback users
+    if (req.userId === 'master-admin') {
+      return res.json({ id: 'master-admin', username: MASTER_ADMIN_USERNAME, role: 'admin' });
+    }
+
+    if (typeof req.userId === 'string' && req.userId.startsWith('offline-')) {
+      const username = req.userId.replace('offline-', '');
+      return res.json({ id: req.userId, username, role: 'user', offline: true });
+    }
+
     const user = await User.findById(req.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     res.json({ id: user._id, username: user.username, role: user.role });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -182,11 +344,34 @@ app.get('/api/auth/me', verifyToken, async (req, res) => {
 
 // GET: Fetch all sessions
 app.get('/api/sessions', async (req, res) => {
+  const loadLocalSessions = () => {
+    const files = fs.existsSync(UNSYNCED_BATCH_DIR)
+      ? fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'))
+      : [];
+    const local = files.map(file => {
+      try {
+        const raw = fs.readFileSync(path.join(UNSYNCED_BATCH_DIR, file), 'utf8');
+        return JSON.parse(raw);
+      } catch (e) {
+        return null;
+      }
+    }).filter(x => x);
+    return local;
+  };
+
   try {
     const sessions = await Session.find().sort({ 'timestamps.start_time': -1 });
-    res.json(sessions);
+    const local = loadLocalSessions();
+    const merged = [...local, ...sessions];
+    merged.sort((a, b) => {
+      const aTime = new Date(a.timestamps?.start_time || 0).getTime();
+      const bTime = new Date(b.timestamps?.start_time || 0).getTime();
+      return bTime - aTime;
+    });
+    return res.json(merged);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.warn('Sessions fetch (cloud) failed:', err.message || err);
+    return res.json(loadLocalSessions());
   }
 });
 
@@ -196,8 +381,16 @@ app.post('/api/sessions', async (req, res) => {
   try {
     const newSession = await session.save();
     res.status(201).json(newSession);
+    return;
   } catch (err) {
-    res.status(400).json({ message: err.message });
+    console.warn('Cloud save failed for session:', err.message || err);
+    // persist offline queue with local ID for later update
+    try {
+      const localSession = await enqueueBatch(req.body);
+      return res.status(201).json({ message: 'Saved locally in unsynced queue', offline: true, data: localSession });
+    } catch (e) {
+      return res.status(500).json({ message: 'Failed to save session both cloud and local', error: e.message });
+    }
   }
 });
 
@@ -216,46 +409,95 @@ app.get('/api/sessions/:id', async (req, res) => {
 
 // PUT: Update a session (rename or update counts)
 app.put('/api/sessions/:id', async (req, res) => {
+  const sessionId = req.params.id;
+  let updateData = {};
+
   try {
-    // Debug: log FULL body to see everything received
-    console.log('📥 PUT request received for ID:', req.params.id);
+    console.log('📥 PUT request received for ID:', sessionId);
     console.log('📦 Full Body:', JSON.stringify(req.body, null, 2));
-    
-    // Build update object with proper nested field handling
-    const updateData = {};
-    
-    // Handle counts object
+
     if (req.body.counts) {
       updateData.counts = req.body.counts;
       console.log('📊 Saving counts:', updateData.counts);
-    } else {
-      console.log('⚠️  No counts received in req.body');
     }
-    
-    // Handle quality_stats object
+
     if (req.body.quality_stats) {
       updateData.quality_stats = req.body.quality_stats;
       console.log('📈 Saving quality_stats:', updateData.quality_stats);
     }
-    
-    // Handle timestamps.end_time
+
+    if (req.body.timestamps) {
+      updateData.timestamps = { ...req.body.timestamps };
+      console.log('⏱️  Saving timestamps:', updateData.timestamps);
+    }
+
     if (req.body['timestamps.end_time']) {
       updateData['timestamps.end_time'] = req.body['timestamps.end_time'];
       console.log('⏱️  Saving end_time:', updateData['timestamps.end_time']);
     }
-    
-    // Handle session_name for rename
+
     if (req.body.session_name) {
       updateData.session_name = req.body.session_name;
     }
-    
-    const updatedSession = await Session.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    );
-    console.log('✅ Session updated:', updatedSession);
-    res.json(updatedSession);
+
+    // If no changes are being sent, don't perform update.
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: 'No update fields provided' });
+    }
+
+    let updatedSession;
+    try {
+      updatedSession = await Session.findByIdAndUpdate(sessionId, updateData, { new: true });
+    } catch (err) {
+      console.warn('Cloud update failed for session:', err.message || err);
+    }
+
+    if (updatedSession) {
+      console.log('✅ Session updated (cloud):', updatedSession);
+      return res.json(updatedSession);
+    }
+
+    console.log('⚠️ Session not found in cloud; try local unsynced queue');
+    const files = fs.existsSync(UNSYNCED_BATCH_DIR)
+      ? fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'))
+      : [];
+
+    let matched = null;
+    for (const file of files) {
+      const filePath = path.join(UNSYNCED_BATCH_DIR, file);
+      try {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const batch = JSON.parse(raw);
+        if (batch._id === sessionId) {
+          // merge stale data and update
+          const merged = {
+            ...batch,
+            ...updateData,
+            timestamps: {
+              ...batch.timestamps,
+              ...(updateData.timestamps || {}),
+              ...(updateData['timestamps.end_time'] ? { end_time: updateData['timestamps.end_time'] } : {})
+            }
+          };
+          if (updateData.counts) merged.counts = updateData.counts;
+          if (updateData.quality_stats) merged.quality_stats = updateData.quality_stats;
+          if (updateData.session_name) merged.session_name = updateData.session_name;
+
+          fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf8');
+          matched = merged;
+          console.log(`✅ Local offline session updated: ${sessionId}`);
+          break;
+        }
+      } catch (e) {
+        console.error('Error reading local session file', file, e);
+      }
+    }
+
+    if (matched) {
+      return res.json(matched);
+    }
+
+    return res.status(404).json({ message: 'Session not found in cloud or local storage' });
   } catch (err) {
     console.error('❌ Error updating session:', err);
     res.status(400).json({ message: err.message });

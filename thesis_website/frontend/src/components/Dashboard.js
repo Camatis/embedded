@@ -113,9 +113,9 @@ function Dashboard({ user, onLogout }) {
   };
 
   const stopSessionImmediately = async () => {
-    if (!sessionActive) return;
+    if (!sessionActive && !sessionPaused) return;
     setHardwareAlert('Stopped due to limit or temperature condition.');
-    await pauseBatch();
+    await endBatch();
   };
   const checkLimits = (stats) => {
     if (settings.limitSmall && stats.small >= settings.limitSmall) {
@@ -210,6 +210,19 @@ function Dashboard({ user, onLogout }) {
         setTimeout(() => setShowNoMangoPopup(false), 1600);
       } else {
         setShowNoMangoPopup(false);
+      }
+
+      // only update counts when a session is active and not paused
+      if (!sessionActive || sessionPaused) {
+        if (data.defective) {
+          setDetectedSize('DEFECTIVE');
+          setIsDefective(true);
+          setIsDefectiveFlag(true);
+        } else {
+          setIsDefective(false);
+          setIsDefectiveFlag(false);
+        }
+        return;
       }
 
       // Check if defective
@@ -326,8 +339,8 @@ function Dashboard({ user, onLogout }) {
       }
     };
 
-    // poll every 300ms
-    const intervalId = setInterval(pollSensorData, 300);
+    // poll every 500ms to reduce CPU load and improve responsiveness on low-end devices
+    const intervalId = setInterval(pollSensorData, 500);
     // initial immediate poll
     pollSensorData();
 
@@ -655,7 +668,9 @@ function Dashboard({ user, onLogout }) {
       });
       if (res.ok) {
         const created = await res.json();
-        setCurrentSessionId(created._id);
+        const newId = created._id || created.data?._id || (created.offline && created.data?._id) || null;
+
+        setCurrentSessionId(newId);
         const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
         setSortingStats(initialCounts);
         countsRef.current = initialCounts;
@@ -665,7 +680,7 @@ function Dashboard({ user, onLogout }) {
         await controlConveyor('start');
         fetchSessions();
       } else {
-        console.error('Failed to start session');
+        console.error('Failed to start session', await res.text());
       }
     } catch (err) {
       console.error('Error starting session', err);
@@ -705,7 +720,7 @@ function Dashboard({ user, onLogout }) {
             defective: countsRef.current.defective,
             total: countsRef.current.total
           },
-          'timestamps.end_time': new Date()
+          timestamps: { end_time: new Date() }
         })
       });
       if (res.ok) {
@@ -894,22 +909,44 @@ function Dashboard({ user, onLogout }) {
               <h3>System Controls</h3>
               {isDefectiveFlag && <div style={{ color: 'red', fontWeight: 700, marginBottom: '8px' }}>DEFECTIVE</div>}
               <div className="system-control-actions">
-                <button 
-                  className="control-button start-button" 
-                  onClick={sessionPaused ? continueBatch : startNewSession}
-                  disabled={sessionActive}
+                <button
+                  className="control-button start-button"
+                  onClick={startNewSession}
+                  disabled={sessionActive || sessionPaused}
                   style={{ fontSize: '15px', padding: '14px 16px' }}
                 >
-                  {sessionPaused ? 'Continue Batch' : 'Start New Batch'}
+                  Start New Batch
                 </button>
-                <button 
-                  className="control-button stop-button" 
-                  onClick={sessionActive ? pauseBatch : sessionPaused ? endBatch : null}
-                  disabled={!sessionActive && !sessionPaused}
-                  style={{ fontSize: '15px', padding: '14px 16px' }}
-                >
-                  {sessionActive ? 'Stop' : sessionPaused ? 'Stop Batch' : 'Stop'}
-                </button>
+
+                {sessionActive && (
+                  <button
+                    className="control-button stop-button"
+                    onClick={pauseBatch}
+                    style={{ fontSize: '15px', padding: '14px 16px' }}
+                  >
+                    Pause Batch
+                  </button>
+                )}
+
+                {sessionPaused && (
+                  <button
+                    className="control-button start-button"
+                    onClick={continueBatch}
+                    style={{ fontSize: '15px', padding: '14px 16px' }}
+                  >
+                    Continue Batch
+                  </button>
+                )}
+
+                {(sessionActive || sessionPaused) && (
+                  <button
+                    className="control-button stop-button"
+                    onClick={endBatch}
+                    style={{ fontSize: '15px', padding: '14px 16px' }}
+                  >
+                    Stop Batch
+                  </button>
+                )}
               </div>
             </div>
           </div>
