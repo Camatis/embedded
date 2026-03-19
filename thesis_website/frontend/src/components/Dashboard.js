@@ -941,7 +941,7 @@ function Dashboard({ user, onLogout }) {
             <span />
             <span />
           </div>
-          <h1>Mango Sorting System</h1>
+          <h1>MangoSort</h1>
         </div>
       </header>
 

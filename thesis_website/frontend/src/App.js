@@ -3,10 +3,11 @@ import React, { useState, useEffect } from 'react';
 import LoginPage from './components/LoginPage';
 import SignupPage from './components/SignupPage';
 import Dashboard from './components/Dashboard';
+import LandingPage from './components/LandingPage';
 import './App.css';
 
 function App() {
-  const [currentPage, setCurrentPage] = useState('login');
+  const [currentPage, setCurrentPage] = useState('landing');
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
@@ -66,7 +67,7 @@ function App() {
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);
-    setCurrentPage('login');
+    setCurrentPage('landing');
   };
 
   if (loading) {
@@ -75,6 +76,35 @@ function App() {
 
   if (user && token) {
     return <Dashboard user={user} onLogout={handleLogout} />;
+  }
+
+  if (currentPage === 'landing') {
+    return (
+      <LandingPage
+        onLogin={() => setCurrentPage('login')}
+        onCreateAccount={() => setCurrentPage('signup')}
+      />
+    );
+  }
+
+  if (currentPage === 'login') {
+    return (
+      <LoginPage
+        onLogin={handleLogin}
+        onSwitchToSignup={() => setCurrentPage('signup')}
+        onBack={() => setCurrentPage('landing')}
+      />
+    );
+  }
+
+  if (currentPage === 'signup') {
+    return (
+      <SignupPage
+        onSignup={handleSignup}
+        onSwitchToLogin={() => setCurrentPage('login')}
+        onBack={() => setCurrentPage('landing')}
+      />
+    );
   }
 
   return (

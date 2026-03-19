@@ -2,8 +2,8 @@ html, body {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  height: 680px; /* target kiosk height */
-  overflow: hidden; /* prevent page scroll in kiosk */
+  height: 680px;
+  overflow: hidden;
 }
 
 * {

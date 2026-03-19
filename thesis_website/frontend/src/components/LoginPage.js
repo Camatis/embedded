@@ -4,7 +4,7 @@ import './AuthStyles.css';
 
 // Login form component: handles credential input, submission and error states
 
-function LoginPage({ onLogin, onSwitchToSignup }) {
+function LoginPage({ onLogin, onSwitchToSignup, onBack }) {
   // Controlled inputs
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -117,6 +117,7 @@ function LoginPage({ onLogin, onSwitchToSignup }) {
   return (
     <div className="auth-container">
       <div className="auth-card">
+        <button type="button" className="back-arrow-button" onClick={onBack}>← Back</button>
         <img src="/login.png" alt="Login" className="auth-logo" /> 
         {error && <div className="error-message">{error}</div>}
         

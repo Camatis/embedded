@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import './AuthStyles.css';
 
-function SignupPage({ onSignup, onSwitchToLogin }) {
+function SignupPage({ onSignup, onSwitchToLogin, onBack }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -52,6 +52,7 @@ function SignupPage({ onSignup, onSwitchToLogin }) {
   return (
     <div className="auth-container">
       <div className="auth-card">
+        <button type="button" className="back-arrow-button" onClick={onBack}>← Back</button>
         <h2>Create Account</h2>
         
         {error && <div className="error-message">{error}</div>}
