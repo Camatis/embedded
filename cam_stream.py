@@ -181,7 +181,7 @@ def home():
 
 if __name__ == '__main__':
     print("Starting Mango Sorter Camera Stream on port 8081...")
-    print("Access endpoint: http://0.0.0.0:8081/offer")
-    print("MJPEG endpoint: http://0.0.0.0:8081/mjpeg")
-    print("Snapshot endpoint: http://0.0.0.0:8081/snapshot")
-    app.run(host='0.0.0.0', port=8081, debug=False, threaded=True)
+    print("Access endpoint: http://127.0.0.1:8081/offer")
+    print("MJPEG endpoint: http://127.0.0.1:8081/mjpeg")
+    print("Snapshot endpoint: http://127.0.0.1:8081/snapshot")
+    app.run(host='127.0.0.1', port=8081, debug=False, threaded=True)

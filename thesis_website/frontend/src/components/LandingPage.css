@@ -1,9 +1,9 @@
 /* Landing Page Styles */
 
 .landing-container {
-  max-width: 1200px;
+  max-width: clamp(800px, 90vw, 1200px);
   margin: 0 auto;
-  padding: 20px;
+  padding: clamp(10px, 2vw, 20px);
 }
 
 .landing-header {
@@ -12,7 +12,7 @@
 }
 
 .landing-header h1 {
-  font-size: 48px;
+  font-size: clamp(24px, 5vw, 48px);
   font-weight: 700;
   color: #1a237e;
   margin: 10px 0;
@@ -20,7 +20,7 @@
 }
 
 .landing-header p {
-  font-size: 18px;
+  font-size: clamp(14px, 2vw, 18px);
   color: #666;
   margin: 10px 0;
 }
@@ -119,8 +119,8 @@
 /* Cards Grid */
 .cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(clamp(280px, 30vw, 320px), 1fr));
+  gap: clamp(16px, 2vw, 24px);
   margin-top: 30px;
 }
 
@@ -171,8 +171,8 @@
 /* Researchers Section */
 .researchers-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(clamp(200px, 25vw, 250px), 1fr));
+  gap: clamp(16px, 2vw, 20px);
   margin-top: 30px;
 }
 
@@ -205,11 +205,11 @@
 /* Responsive Design */
 @media (max-width: 768px) {
   .landing-header h1 {
-    font-size: 32px;
+    font-size: clamp(20px, 6vw, 32px);
   }
 
   .landing-header p {
-    font-size: 16px;
+    font-size: clamp(12px, 3vw, 16px);
   }
 
   .auth-buttons-banner {
@@ -224,22 +224,38 @@
     grid-template-columns: 1fr;
   }
 
+  .researchers-grid {
+    grid-template-columns: 1fr;
+  }
+
   .landing-tabs {
-    justifyContent: flex-start;
+    justify-content: flex-start;
   }
 }
 
 @media (max-width: 480px) {
+  .landing-container {
+    padding: 10px;
+  }
+
   .landing-header h1 {
-    font-size: 24px;
+    font-size: clamp(18px, 7vw, 24px);
   }
 
   .landing-header p {
-    font-size: 14px;
+    font-size: clamp(12px, 4vw, 14px);
   }
 
   .auth-buttons-banner button {
     padding: 12px 24px;
     font-size: 14px;
+  }
+
+  .about-card {
+    padding: 16px;
+  }
+
+  .researcher-card {
+    padding: 16px;
   }
 }
