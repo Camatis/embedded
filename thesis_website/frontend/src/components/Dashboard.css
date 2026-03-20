@@ -498,6 +498,19 @@ body {
   justify-content: center;
 }
 
+.camera-container img,
+.camera-container video {
+  width: 100%;
+  max-height: 280px;  /* smaller feed height */
+  object-fit: cover;
+  border-radius: 12px;
+}
+
+.camera-feed-section {
+  max-height: 380px;
+  overflow: hidden;
+}
+
 .camera-placeholder {
   width: 100%;
   max-width: 100%; /* use 100% of container */
