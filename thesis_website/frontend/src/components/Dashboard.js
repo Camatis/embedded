@@ -93,11 +93,18 @@ function Dashboard({ user, onLogout }) {
 
   const controlConveyor = async (action) => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/conveyor`;
+      let endpoint = '/api/conveyor';
+      if (action === 'pause') {
+        endpoint = '/api/hardware/pause';
+      } else if (action === 'continue') {
+        endpoint = '/api/hardware/continue';
+      }
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000${endpoint}`;
+      const payload = action === 'pause' || action === 'continue' ? {} : { action };
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
+        body: JSON.stringify(payload)
       });
       const result = await res.json();
       if (!res.ok) {
@@ -746,7 +753,6 @@ function Dashboard({ user, onLogout }) {
       }
 
       await controlConveyor('start');
-      await startHardware();
       fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
@@ -763,8 +769,7 @@ function Dashboard({ user, onLogout }) {
     setSessionActive(true);
     setSessionPaused(false);
     setHardwareAlert('Continuing existing batch');
-    await controlConveyor('start');
-    await startHardware();
+    await controlConveyor('continue');
   };
 
   const endBatch = async () => {
@@ -794,7 +799,6 @@ function Dashboard({ user, onLogout }) {
       });
       if (res.ok) {
         await controlConveyor('stop');
-        await stopHardware();
         setSessionActive(false);
         setSessionPaused(false);
         setCurrentSessionId(null);
@@ -835,8 +839,7 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
-        await controlConveyor('stop');
-        await stopHardware();
+        await controlConveyor('pause');
         setSessionActive(false);
         setSessionPaused(true);
         setHardwareAlert('Batch paused - you may continue or stop batch');

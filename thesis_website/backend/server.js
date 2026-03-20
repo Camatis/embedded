@@ -841,50 +841,46 @@ let conveyorProcess = null;
 
 app.post('/api/conveyor', (req, res) => {
   const action = req.body?.action;
-  const scriptPath = process.env.CONVEYOR_SCRIPT_PATH || './mango-sorter.py';
 
   if (action === 'start' || action === 'continue') {
-    if (conveyorProcess) {
-      return res.json({ success: true, message: 'Conveyor already running' });
-    }
-
-    try {
-      conveyorProcess = spawn('python3', [scriptPath], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: process.cwd(),
-        detached: true
-      });
-
-      conveyorProcess.stdout.on('data', data => console.log(`[conveyor stdout] ${data}`));
-      conveyorProcess.stderr.on('data', data => console.error(`[conveyor stderr] ${data}`));
-      conveyorProcess.on('close', code => {
-        console.log(`Conveyor script exited with code ${code}`);
-        conveyorProcess = null;
-      });
-
-      return res.json({ success: true, message: 'Conveyor process started' });
-    } catch (err) {
-      console.error('Failed to start conveyor process', err);
-      conveyorProcess = null;
-      return res.status(500).json({ success: false, message: err.message });
-    }
+    // Ensure hardware controller is active and set running state
+    const startResult = startHardwareProcess();
+    writeHardwareControlFile(true);
+    const status = startResult.success ? 200 : 500;
+    return res.status(status).json({
+      success: startResult.success,
+      message: startResult.message || 'Hardware controller started and conveyor enabled'
+    });
   }
 
   if (action === 'stop') {
-    if (!conveyorProcess) {
-      return res.json({ success: true, message: 'Conveyor already stopped' });
-    }
-    try {
-      process.kill(-conveyorProcess.pid, 'SIGTERM');
+    // Pause conveyor and keep controller ready (or fully stop if needed)
+    writeHardwareControlFile(false);
+    if (conveyorProcess) {
+      try {
+        process.kill(-conveyorProcess.pid, 'SIGTERM');
+      } catch (err) {
+        console.error('Error stopping conveyor subprocess:', err);
+      }
       conveyorProcess = null;
-      return res.json({ success: true, message: 'Conveyor process stopped' });
-    } catch (err) {
-      console.error('Failed to stop conveyor process', err);
-      return res.status(500).json({ success: false, message: err.message });
     }
+    return res.json({ success: true, message: 'Conveyor stopped and hardware paused' });
   }
 
   return res.status(400).json({ success: false, message: 'Invalid action' });
+});
+
+// New hardware pause/continue controls for direct run-state changes
+app.post('/api/hardware/pause', (req, res) => {
+  writeHardwareControlFile(false);
+  return res.json({ success: true, message: 'Hardware controller paused' });
+});
+
+app.post('/api/hardware/continue', (req, res) => {
+  writeHardwareControlFile(true);
+  const result = startHardwareProcess();
+  const status = result.success ? 200 : 500;
+  return res.status(status).json(result);
 });
 
 // Basic route
