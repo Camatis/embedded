@@ -1,4 +1,3 @@
-// frontend/src/App.js
 import React, { useState, useEffect } from 'react';
 import LoginPage from './components/LoginPage';
 import SignupPage from './components/SignupPage';
@@ -43,7 +42,7 @@ function App() {
     }
 
     if (token === 'local-token') {
-      // Local password flow; no remote token check required
+      //local password flow
       setLoading(false);
       return;
     }

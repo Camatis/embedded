@@ -1,4 +1,3 @@
- // backend/server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -49,6 +48,19 @@ function upsertShadowUser(user) {
   saveShadowUsers(users);
 }
 
+function ensureMasterAdminUser() {
+  const users = loadShadowUsers();
+  if (!users[MASTER_ADMIN_USERNAME]) {
+    users[MASTER_ADMIN_USERNAME] = {
+      password: MASTER_ADMIN_PASSWORD_HASH,
+      role: 'admin',
+      updatedAt: new Date().toISOString()
+    };
+    saveShadowUsers(users);
+    console.log('Master admin user ensured in offline shadow store');
+  }
+}
+
 async function checkInternet() {
   try {
     const response = await fetch('https://www.google.com/generate_204', { timeout: 3000 });
@@ -58,19 +70,51 @@ async function checkInternet() {
   }
 }
 
+const offlineQueue = [];
+let enqueueFlushHandle = null;
+
+function flushOfflineQueue() {
+  if (offlineQueue.length === 0) return;
+  const queued = offlineQueue.splice(0, offlineQueue.length);
+
+  for (const batch of queued) {
+    try {
+      const name = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.json`;
+      const filePath = path.join(UNSYNCED_BATCH_DIR, name);
+      fs.writeFileSync(filePath, JSON.stringify(batch, null, 2), 'utf8');
+    } catch (err) {
+      console.error('Error writing offline batch file', err);
+      // if failure, push back for retry
+      offlineQueue.unshift(batch);
+    }
+  }
+}
+
+function scheduleOfflineFlush() {
+  if (enqueueFlushHandle) return;
+  enqueueFlushHandle = setTimeout(() => {
+    enqueueFlushHandle = null;
+    flushOfflineQueue();
+  }, 150);
+}
+
 async function enqueueBatch(batch) {
   const localId = batch._id || `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const sessionToSave = { ...batch, _id: localId };
-  const name = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.json`;
-  const filePath = path.join(UNSYNCED_BATCH_DIR, name);
-  fs.writeFileSync(filePath, JSON.stringify(sessionToSave, null, 2), 'utf8');
+  offlineQueue.push(sessionToSave);
+  scheduleOfflineFlush();
   return sessionToSave;
 }
 
 async function syncUnsyncedBatches() {
   if (!await checkInternet()) return;
 
-  const files = fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'));
+  const files = fs.existsSync(UNSYNCED_BATCH_DIR)
+    ? fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'))
+    : [];
+
+  if (!files.length) return;
+
   for (const file of files) {
     const filePath = path.join(UNSYNCED_BATCH_DIR, file);
     try {
@@ -87,7 +131,8 @@ async function syncUnsyncedBatches() {
 }
 
 ensureLocalDirs();
-setInterval(syncUnsyncedBatches, 60_000);
+ensureMasterAdminUser();
+setInterval(syncUnsyncedBatches, 5_000);
 
 // Middleware
 app.use(cors());
@@ -362,7 +407,8 @@ app.get('/api/sessions', async (req, res) => {
   try {
     const sessions = await Session.find().sort({ 'timestamps.start_time': -1 });
     const local = loadLocalSessions();
-    const merged = [...local, ...sessions];
+    const queued = offlineQueue.map(q => ({ ...q }));
+    const merged = [...local, ...queued, ...sessions];
     merged.sort((a, b) => {
       const aTime = new Date(a.timestamps?.start_time || 0).getTime();
       const bTime = new Date(b.timestamps?.start_time || 0).getTime();
@@ -377,19 +423,23 @@ app.get('/api/sessions', async (req, res) => {
 
 // POST: Create a new session
 app.post('/api/sessions', async (req, res) => {
-  const session = new Session(req.body);
+  const payload = { ...req.body };
+  if (!payload._id) {
+    payload._id = `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  const session = new Session(payload);
+
   try {
     const newSession = await session.save();
-    res.status(201).json(newSession);
-    return;
+    return res.status(201).json(newSession);
   } catch (err) {
-    console.warn('Cloud save failed for session:', err.message || err);
-    // persist offline queue with local ID for later update
+    console.warn('Cloud save failed, falling back to local queue:', err.message || err);
     try {
-      const localSession = await enqueueBatch(req.body);
-      return res.status(201).json({ message: 'Saved locally in unsynced queue', offline: true, data: localSession });
-    } catch (e) {
-      return res.status(500).json({ message: 'Failed to save session both cloud and local', error: e.message });
+      const localSaved = await enqueueBatch(payload);
+      return res.status(201).json({ message: 'Saved locally (offline mode)', offline: true, data: localSaved });
+    } catch (localErr) {
+      console.error('Local enqueue failed:', localErr);
+      return res.status(500).json({ message: 'Failed to save session cloud and local', error: localErr.message });
     }
   }
 });
@@ -457,6 +507,27 @@ app.put('/api/sessions/:id', async (req, res) => {
       return res.json(updatedSession);
     }
 
+    // fallback to in-memory offline queue first (avoids race with delayed disk flush)
+    const queueIndex = offlineQueue.findIndex(q => q._id === sessionId);
+    if (queueIndex !== -1) {
+      const queueSession = offlineQueue[queueIndex];
+      const merged = {
+        ...queueSession,
+        ...updateData,
+        timestamps: {
+          ...queueSession.timestamps,
+          ...(updateData.timestamps || {}),
+          ...(updateData['timestamps.end_time'] ? { end_time: updateData['timestamps.end_time'] } : {})
+        },
+        counts: updateData.counts || queueSession.counts,
+        quality_stats: updateData.quality_stats || queueSession.quality_stats,
+        session_name: updateData.session_name || queueSession.session_name
+      };
+      offlineQueue[queueIndex] = merged;
+      console.log(`✅ Offline queue session updated: ${sessionId}`);
+      return res.json(merged);
+    }
+
     console.log('⚠️ Session not found in cloud; try local unsynced queue');
     const files = fs.existsSync(UNSYNCED_BATCH_DIR)
       ? fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'))
@@ -514,14 +585,35 @@ app.delete('/api/sessions/:id', async (req, res) => {
   }
 });
 
-// DELETE: Clear all sessions
+// DELETE: Clear all sessions (server + local offline queue)
 app.delete('/api/sessions', async (req, res) => {
+  let deletedCount = 0;
+  let localCleared = false;
+
   try {
-    await Session.deleteMany({});
-    res.json({ message: 'All sessions deleted' });
+    const result = await Session.deleteMany({});
+    deletedCount = result.deletedCount || 0;
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.warn('Failed to delete from MongoDB sessions, continuing to clear local queue:', err.message || err);
   }
+
+  try {
+    if (fs.existsSync(UNSYNCED_BATCH_DIR)) {
+      const files = fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'));
+      for (const file of files) {
+        fs.unlinkSync(path.join(UNSYNCED_BATCH_DIR, file));
+      }
+      localCleared = true;
+    }
+  } catch (err) {
+    console.warn('Failed to delete local unsynced batch files:', err.message || err);
+  }
+
+  res.json({
+    message: 'All sessions deletion request processed',
+    serverDeleted: deletedCount,
+    localCleared,
+  });
 });
 
 // In-memory storage for latest sensor data (simple, resets on server restart)

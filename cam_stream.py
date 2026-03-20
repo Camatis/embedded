@@ -15,6 +15,7 @@ The <video> element gets real-time frames from /dev/video0.
 
 import asyncio
 import cv2
+import numpy as np
 from flask import Flask, request, jsonify
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaBlackhole
@@ -40,6 +41,8 @@ class CameraTrack(VideoStreamTrack):
             # return black frame if camera fails
             img = 255 * np.zeros((480, 640, 3), np.uint8)
             frame = img
+        else:
+            frame = cv2.flip(frame, 0)  # vertical flip
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
         video_frame.pts = pts

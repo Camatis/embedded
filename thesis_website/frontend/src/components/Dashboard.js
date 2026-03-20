@@ -1,18 +1,17 @@
-// frontend/src/components/Dashboard.js
 import React, { useState, useEffect, useRef } from 'react';
 import { jsPDF } from 'jspdf';
 import './Dashboard.css';
 
 function Dashboard({ user, onLogout }) {
-  // Main view state: 'dashboard' | 'sensor-status' | 'batch-history'
+  //main view state
   const [currentView, setCurrentView] = useState('dashboard');
-  // Sensor states: detection flag and human-readable status
+  //sensor detection states
   const [sensorStates, setSensorStates] = useState({
     small: { status: 'Inactive', detecting: false },
     medium: { status: 'Inactive', detecting: false },
     large: { status: 'Inactive', detecting: false }
   });
-  // Last detected mango size (SMALL, MEDIUM, LARGE, DEFECTIVE, NONE)
+  //last detected mango size
   const [detectedSize, setDetectedSize] = useState('NONE');
   const [sortingStats, setSortingStats] = useState({
     small: 0,
@@ -21,11 +20,11 @@ function Dashboard({ user, onLogout }) {
     total: 0,
     defective: 0
   });
-  // Flag for the most recent item being defective
+  //defective flag
   const [isDefective, setIsDefective] = useState(false);
   const [sortingHistory, setSortingHistory] = useState([]);
   const [showNoMangoPopup, setShowNoMangoPopup] = useState(false);
-  // Session and history management
+  //session and batch management
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -90,7 +89,7 @@ function Dashboard({ user, onLogout }) {
   const [pwNew, setPwNew] = useState('');
   const [pwConfirm, setPwConfirm] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
-  // Track counts with ref to ensure we always save current values (not stale state)
+  //track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
 
   const controlConveyor = async (action) => {
@@ -192,18 +191,17 @@ function Dashboard({ user, onLogout }) {
     setPwConfirm('');
   };
 
-  // Process incoming sensor payload and update UI state/counters
-  // Input: { small, medium, large, defective, detectedSize }
+  //process sensor data and update stats
   const handleSensorData = (data) => {
     try {
-      // Update sensor states
+      //update sensor states
       setSensorStates(prev => ({
         small: { ...prev.small, detecting: data.small },
         medium: { ...prev.medium, detecting: data.medium },
         large: { ...prev.large, detecting: data.large }
       }));
 
-      // Show no mango popup when all sensors report none for 1 update (if enabled)
+      //show no mango popup if needed
       const anyDetected = data.small || data.medium || data.large || data.defective || data.detectedSize;
       if (!anyDetected && settings.showNoMangoPopup) {
         setShowNoMangoPopup(true);
@@ -212,7 +210,7 @@ function Dashboard({ user, onLogout }) {
         setShowNoMangoPopup(false);
       }
 
-      // only update counts when a session is active and not paused
+      //only update counts when session is active
       if (!sessionActive || sessionPaused) {
         if (data.defective) {
           setDetectedSize('DEFECTIVE');
@@ -225,7 +223,7 @@ function Dashboard({ user, onLogout }) {
         return;
       }
 
-      // Check if defective
+      //check if defective
       if (data.defective) {
         setIsDefective(true);
         setIsDefectiveFlag(true);
@@ -233,14 +231,14 @@ function Dashboard({ user, onLogout }) {
         console.log('🚨 Defective detected! Adding to count.');
         setSortingStats(prev => {
           const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
-          countsRef.current = updated;  // Keep ref in sync
+          countsRef.current = updated;  //keep ref synced
           checkLimits(updated);
           return updated;
         });
       } else {
         setIsDefective(false);
         setIsDefectiveFlag(false);
-        // Update detected size based on hardware data
+        //update size based on hardware
         switch(data.detectedSize) {
           case 1:
             setDetectedSize('SMALL');
@@ -274,7 +272,7 @@ function Dashboard({ user, onLogout }) {
         }
       }
 
-      // Add to sorting history with timestamp
+      //add to history
       if (data.detectedSize >= 1 && data.detectedSize <= 3) {
         const timestamp = new Date().toLocaleTimeString();
         setSortingHistory(prev => {
@@ -282,7 +280,7 @@ function Dashboard({ user, onLogout }) {
             timestamp,
             size: data.detectedSize === 1 ? 'SMALL' : data.detectedSize === 2 ? 'MEDIUM' : 'LARGE'
           }];
-          // Keep only last 100 entries
+          //keep last 100 entries
           return newHistory.slice(-100);
         });
       }
@@ -291,10 +289,9 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
-  // Poll backend endpoint for latest sensor readings and feed into handler
-  // Runs on mount and polls every 300ms; cleans up on unmount
+  //poll sensor data
   useEffect(() => {
-    // mark sensors active
+    //mark sensors active
     setSensorStates(prev => ({
       small: { ...prev.small, status: 'Active' },
       medium: { ...prev.medium, status: 'Active' },
@@ -503,11 +500,19 @@ function Dashboard({ user, onLogout }) {
       });
       if (res.ok) {
         setSessions([]);
+        setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
+        setCurrentSessionId(null);
+        await fetchSessions();
       } else {
         console.error('Failed to clear sessions');
+        // fallback: clear UI state to avoid stale views
+        setSessions([]);
+        setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
       }
     } catch (err) {
       console.error('Error clearing sessions', err);
+      setSessions([]);
+      setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
     }
   };
 
@@ -718,38 +723,47 @@ function Dashboard({ user, onLogout }) {
   // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
+      // fast UI response
+      const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
+      setSortingStats(initialCounts);
+      countsRef.current = initialCounts;
+      setSessionActive(true);
+      setSessionPaused(false);
+      setHardwareAlert('Starting new batch (offline-safe)...');
+
       const clearUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/clear-sensor-data`;
       await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
 
       const payload = {
         session_name: `Batch ${sessions.length + 1}`,
-        counts: { small: 0, medium: 0, large: 0, defective: 0 },
+        counts: initialCounts,
         timestamps: { start_time: new Date() }
       };
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
+
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+
       if (res.ok) {
         const created = await res.json();
         const newId = created._id || created.data?._id || (created.offline && created.data?._id) || null;
-
         setCurrentSessionId(newId);
-        const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
-        setSortingStats(initialCounts);
-        countsRef.current = initialCounts;
-        setSessionActive(true);
-        setSessionPaused(false);
         setHardwareAlert('New batch started');
-        await controlConveyor('start');
-        fetchSessions();
       } else {
-        console.error('Failed to start session', await res.text());
+        const errorText = await res.text();
+        console.error('Failed to start session', errorText);
+        setHardwareAlert(`Started offline, sync pending${errorText ? ': ' + errorText : ''}`);
       }
+
+      await controlConveyor('start');
+      fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
+      setHardwareAlert(`Error starting batch: ${err.message}`);
+      setSessionActive(false);
     }
   };
 

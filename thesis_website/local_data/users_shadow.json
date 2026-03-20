@@ -1,1 +1,7 @@
-{}
+{
+  "admin": {
+    "password": "$2b$10$BEKdhn6qQVuheUG6l2fR6.H.1Xgi7evgKiaTgB8Mzu8vFe9fl73Hq",
+    "role": "admin",
+    "updatedAt": "2026-03-20T18:10:36.108Z"
+  }
+}
