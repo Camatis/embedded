@@ -35,6 +35,7 @@ function Dashboard({ user, onLogout }) {
   const [cameraDevices, setCameraDevices] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [webrtcStatus, setWebrtcStatus] = useState('idle');
+  const [cameraMode, setCameraMode] = useState('mjpeg'); // prioritize MJPEG
   const pcRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
@@ -449,8 +450,17 @@ function Dashboard({ user, onLogout }) {
     return () => clearInterval(intervalId);
   }, [stopSessionImmediately]);
 
-  // Start and manage webcam stream for live preview via WebRTC
+  // Start and manage webcam stream for live preview via WebRTC (only in WebRTC mode)
   useEffect(() => {
+    if (cameraMode !== 'webrtc') {
+      setWebrtcStatus('idle');
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      return;
+    }
+
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
@@ -476,7 +486,7 @@ function Dashboard({ user, onLogout }) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        const response = await fetch('/api/webrtc-offer', {
+        const response = await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/webrtc-offer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
@@ -507,7 +517,7 @@ function Dashboard({ user, onLogout }) {
         pcRef.current = null;
       }
     };
-  }, []);
+  }, [cameraMode]);
 
     // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
@@ -1021,12 +1031,34 @@ function Dashboard({ user, onLogout }) {
               <div className="camera-controls">
                 <h2>Live Camera Feed</h2>
               </div>
+              <div className="camera-mode-select" style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                <button
+                  className={`control-button ${cameraMode === 'mjpeg' ? 'start-button' : 'stop-button'}`}
+                  onClick={() => setCameraMode('mjpeg')}
+                >
+                  MJPEG
+                </button>
+                <button
+                  className={`control-button ${cameraMode === 'webrtc' ? 'start-button' : 'stop-button'}`}
+                  onClick={() => setCameraMode('webrtc')}
+                >
+                  WebRTC
+                </button>
+              </div>
+
               <div className="camera-container">
-                {cameraError ? (
+                {cameraMode === 'mjpeg' ? (
+                  <img
+                    src={`${window.location.protocol}//${window.location.hostname}:8081/mjpeg`}
+                    alt="MJPEG camera stream"
+                    style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px' }}
+                    onError={() => setCameraError('MJPEG stream unavailable. Is cam_stream.py running?')}
+                  />
+                ) : cameraError ? (
                   <div className="camera-placeholder">
                     <p><strong>Camera Unavailable</strong></p>
-                    <p style={{fontSize: '12px', marginTop: '8px'}}>{cameraError}</p>
-                    <p style={{fontSize: '12px', marginTop: '12px', color: '#666'}}>
+                    <p style={{ fontSize: '12px', marginTop: '8px' }}>{cameraError}</p>
+                    <p style={{ fontSize: '12px', marginTop: '12px', color: '#666' }}>
                       Make sure `cam_stream.py` is running on Raspberry Pi and that backend route `/api/webrtc-offer` is available.
                     </p>
                   </div>
@@ -1034,7 +1066,9 @@ function Dashboard({ user, onLogout }) {
                   <video ref={videoRef} className="camera-video" autoPlay playsInline muted />
                 )}
               </div>
-              <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>WebRTC status: {webrtcStatus}</p>
+              <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
+                Mode: {cameraMode.toUpperCase()} {cameraMode === 'webrtc' ? `(WebRTC status: ${webrtcStatus})` : '(MJPEG)'}
+              </p>
             </div>
 
             <div className="system-controls">

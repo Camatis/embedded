@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import './Dashboard.css';
+import './LandingPage.css';
 
 function LandingPage({ onLogin, onCreateAccount }) {
   const [activeTab, setActiveTab] = useState('overview');

@@ -1,0 +1,245 @@
+/* Landing Page Styles */
+
+.landing-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.landing-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.landing-header h1 {
+  font-size: 48px;
+  font-weight: 700;
+  color: #1a237e;
+  margin: 10px 0;
+  letter-spacing: -0.5px;
+}
+
+.landing-header p {
+  font-size: 18px;
+  color: #666;
+  margin: 10px 0;
+}
+
+.auth-buttons-banner {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin: 30px 0;
+  flex-wrap: wrap;
+}
+
+.auth-buttons-banner button {
+  padding: 14px 32px;
+  font-size: 16px;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.auth-buttons-banner .login-btn {
+  background-color: #1976d2;
+  color: white;
+}
+
+.auth-buttons-banner .login-btn:hover {
+  background-color: #1565c0;
+  box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
+}
+
+.auth-buttons-banner .signup-btn {
+  background-color: #43a047;
+  color: white;
+}
+
+.auth-buttons-banner .signup-btn:hover {
+  background-color: #388e3c;
+  box-shadow: 0 4px 12px rgba(67, 160, 71, 0.3);
+}
+
+/* Tab Navigation */
+.landing-tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 30px;
+  border-bottom: 2px solid #eee;
+  flex-wrap: wrap;
+}
+
+.landing-tabs button {
+  padding: 12px 20px;
+  font-size: 16px;
+  font-weight: 500;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #666;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.landing-tabs button.active {
+  color: #1976d2;
+  border-bottom-color: #1976d2;
+}
+
+.landing-tabs button:hover {
+  color: #1976d2;
+}
+
+/* Content Sections */
+.landing-content {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.content-text {
+  font-size: 16px;
+  line-height: 1.6;
+  color: #333;
+  margin-bottom: 20px;
+}
+
+/* Cards Grid */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  margin-top: 30px;
+}
+
+.about-card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s ease;
+}
+
+.about-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+}
+
+.about-card .card-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.about-card h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1a237e;
+  margin-bottom: 12px;
+}
+
+.about-card p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #555;
+}
+
+.about-card ul {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #555;
+  margin-left: 20px;
+}
+
+.about-card ul li {
+  margin-bottom: 8px;
+}
+
+/* Researchers Section */
+.researchers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  margin-top: 30px;
+}
+
+.researcher-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  padding: 24px;
+  color: white;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+.researcher-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+}
+
+.researcher-card h4 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.researcher-card p {
+  font-size: 14px;
+  opacity: 0.95;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .landing-header h1 {
+    font-size: 32px;
+  }
+
+  .landing-header p {
+    font-size: 16px;
+  }
+
+  .auth-buttons-banner {
+    flex-direction: column;
+  }
+
+  .auth-buttons-banner button {
+    width: 100%;
+  }
+
+  .cards-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-tabs {
+    justifyContent: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .landing-header h1 {
+    font-size: 24px;
+  }
+
+  .landing-header p {
+    font-size: 14px;
+  }
+
+  .auth-buttons-banner button {
+    padding: 12px 24px;
+    font-size: 14px;
+  }
+}
