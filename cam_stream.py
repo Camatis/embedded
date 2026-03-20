@@ -20,6 +20,7 @@ from flask import Flask, request, jsonify, Response
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaBlackhole
 from av import VideoFrame
+from picamera2 import Picamera2
 import os
 import sys
 
@@ -27,90 +28,76 @@ app = Flask(__name__)
 pcs = set()
 
 # MJPEG stream fallback for web UI (option A)
-def mjpeg_generator(cam_index=0, width=640, height=480, fps=15):
-    cap = cv2.VideoCapture(cam_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, fps)
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            # continue so we can retry
-            continue
-
-        # Convert BGR frame to JPEG bytes
-        ret, jpeg = cv2.imencode('.jpg', frame)
-        if not ret:
-            continue
-
-        frame_bytes = jpeg.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-
-    cap.release()
+def mjpeg_generator(width=640, height=480, fps=15):
+    picam2 = Picamera2()
+    config = picam2.create_video_configuration(main={"size": (width, height)})
+    picam2.configure(config)
+    picam2.start()
+    
+    try:
+        while True:
+            frame = picam2.capture_array()
+            # Convert to JPEG bytes
+            ret, jpeg = cv2.imencode('.jpg', frame)
+            if ret:
+                frame_bytes = jpeg.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+    finally:
+        picam2.stop()
 
 @app.route('/mjpeg')
 def mjpeg_stream():
     return Response(
-        mjpeg_generator(cam_index=0, width=640, height=480, fps=15),
+        mjpeg_generator(width=640, height=480, fps=15),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
 
 @app.route('/snapshot')
 def snapshot():
-    cap = cv2.VideoCapture(0)
-    ret, frame = cap.read()
-    cap.release()
-    if not ret:
-        return jsonify({'error': 'Unable to capture frame'}), 500
+    picam2 = Picamera2()
+    config = picam2.create_still_configuration(main={"size": (640, 480)})
+    picam2.configure(config)
+    picam2.start()
+    frame = picam2.capture_array()
+    picam2.stop()
     _, jpeg = cv2.imencode('.jpg', frame)
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
 class CameraTrack(VideoStreamTrack):
-    def __init__(self, cam_index=0, width=640, height=480, fps=15):
+    def __init__(self, width=640, height=480, fps=15):
         super().__init__()
-        self.cap = None
+        self.picam2 = None
         self.width = width
         self.height = height
         self.fps = fps
         self.camera_available = False
-        self.use_libcamera = False
         
-        # Try to open camera with OpenCV
+        # Try to initialize camera with picamera2
         try:
-            self.cap = cv2.VideoCapture(cam_index)
-            if self.cap and self.cap.isOpened():
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                self.cap.set(cv2.CAP_PROP_FPS, fps)
-                # Test read
-                ret, _ = self.cap.read()
-                if ret:
-                    self.camera_available = True
-                    print(f"✓ Camera initialized via OpenCV on /dev/video{cam_index}")
-                else:
-                    print("⚠ OpenCV camera opened but read failed, will use black frames")
-                    self.cap = None
-            else:
-                print(f"⚠ OpenCV couldn't open /dev/video{cam_index}")
+            self.picam2 = Picamera2()
+            config = self.picam2.create_video_configuration(main={"size": (width, height)})
+            self.picam2.configure(config)
+            self.picam2.start()
+            # Test capture
+            _ = self.picam2.capture_array()
+            self.camera_available = True
+            print("✓ Camera initialized via picamera2")
         except Exception as e:
-            print(f"⚠ OpenCV error: {e}")
+            print(f"⚠ picamera2 error: {e}")
+            self.camera_available = False
         
         if not self.camera_available:
+            print("⚠ Camera not available - will stream black frames as fallback")
             print("⚠ Camera not available - will stream black frames as fallback")
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
         
-        if self.camera_available and self.cap:
+        if self.camera_available and self.picam2:
             try:
-                ret, frame = self.cap.read()
-                if not ret:
-                    print("⚠ Failed to read frame from camera")
-                    frame = 255 * np.zeros((self.height, self.width, 3), np.uint8)
-                else:
-                    frame = cv2.flip(frame, 0)  # vertically flip
+                frame = self.picam2.capture_array()
+                frame = cv2.flip(frame, 0)  # vertically flip if needed
             except Exception as e:
                 print(f"⚠ Camera read error: {e}")
                 frame = 255 * np.zeros((self.height, self.width, 3), np.uint8)
@@ -136,8 +123,8 @@ class CameraTrack(VideoStreamTrack):
     def stop(self):
         super().stop()
         try:
-            if self.cap:
-                self.cap.release()
+            if self.picam2:
+                self.picam2.stop()
         except Exception as e:
             print(f"⚠ Error closing camera: {e}")
 
@@ -158,7 +145,7 @@ def offer():
             if pc.iceConnectionState == 'failed':
                 asyncio.ensure_future(pc.close())
 
-        camera = CameraTrack(cam_index=0, width=640, height=480, fps=15)
+        camera = CameraTrack(width=640, height=480, fps=15)
         pc.addTrack(camera)
 
         async def run():
