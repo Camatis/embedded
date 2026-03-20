@@ -88,9 +88,9 @@ function LandingPage({ onLogin, onCreateAccount }) {
           <h3>Researchers</h3>
           <div className="researchers-grid">
             {[
-              { name: 'Vince Camat', role: 'User Interface', img: '/Camat.jpg' },            //for roles and pictures
+              { name: 'Vince Camat', role: 'User Interface', img: '/Camat.JPG' },            //for roles and pictures
               { name: 'Aeriele Magbanua', role: 'Hardware', img: '/picture.png' },
-              { name: 'Shiloh Marfil', role: 'Software', img: '/Marfil.jpg' }
+              { name: 'Shiloh Marfil', role: 'Software', img: '/Marfil.JPG' }
             ].map((person, idx) => (
               <div key={idx} className="researcher-card">
                 <img src={person.img} alt={person.name} className="researcher-photo" />
