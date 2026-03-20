@@ -73,6 +73,78 @@ async function checkInternet() {
 const offlineQueue = [];
 let enqueueFlushHandle = null;
 
+// ===== HARDWARE CONTROL =====
+const HARDWARE_CONTROL_FILE = '/tmp/mangosort_control.json';
+let hardwareProcess = null;
+let hardwareRunning = false;
+
+function writeHardwareControlFile(running) {
+  try {
+    fs.writeFileSync(HARDWARE_CONTROL_FILE, JSON.stringify({ running }), 'utf8');
+    hardwareRunning = running;
+  } catch (err) {
+    console.error('Failed to write hardware control file:', err);
+  }
+}
+
+function startHardwareProcess() {
+  if (hardwareProcess) {
+    console.log('Hardware process already running');
+    return { success: true, message: 'Hardware already running' };
+  }
+
+  try {
+    console.log('Starting hardware controller process...');
+    hardwareProcess = spawn('python3', [path.join(__dirname, '..', 'hardware_controller.py')], {
+      detached: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    hardwareProcess.stdout.on('data', (data) => {
+      console.log(`[Hardware] ${data.toString().trim()}`);
+    });
+
+    hardwareProcess.stderr.on('data', (data) => {
+      console.error(`[Hardware ERROR] ${data.toString().trim()}`);
+    });
+
+    hardwareProcess.on('close', (code) => {
+      console.log(`Hardware process exited with code ${code}`);
+      hardwareProcess = null;
+      hardwareRunning = false;
+    });
+
+    writeHardwareControlFile(true);
+    return { success: true, message: 'Hardware process started' };
+  } catch (err) {
+    console.error('Failed to start hardware process:', err);
+    return { success: false, message: err.message };
+  }
+}
+
+function stopHardwareProcess() {
+  if (!hardwareProcess) {
+    console.log('No hardware process running');
+    return { success: false, message: 'No hardware process to stop' };
+  }
+
+  try {
+    console.log('Stopping hardware controller...');
+    writeHardwareControlFile(false);
+    
+    if (hardwareProcess) {
+      hardwareProcess.kill('SIGTERM');
+      hardwareProcess = null;
+    }
+    
+    return { success: true, message: 'Hardware process stopped' };
+  } catch (err) {
+    console.error('Failed to stop hardware process:', err);
+    hardwareProcess = null;
+    return { success: false, message: err.message };
+  }
+}
+
 function flushOfflineQueue() {
   if (offlineQueue.length === 0) return;
   const queued = offlineQueue.splice(0, offlineQueue.length);
@@ -613,6 +685,30 @@ app.delete('/api/sessions', async (req, res) => {
     message: 'All sessions deletion request processed',
     serverDeleted: deletedCount,
     localCleared,
+  });
+});
+
+// ===== HARDWARE CONTROL ENDPOINTS =====
+// POST: Start hardware controller process
+app.post('/api/hardware/start', (req, res) => {
+  const result = startHardwareProcess();
+  const status = result.success ? 200 : 500;
+  res.status(status).json(result);
+});
+
+// POST: Stop hardware controller process
+app.post('/api/hardware/stop', (req, res) => {
+  const result = stopHardwareProcess();
+  const status = result.success ? 200 : 500;
+  res.status(status).json(result);
+});
+
+// GET: Check hardware controller status
+app.get('/api/hardware/status', (req, res) => {
+  res.json({
+    running: hardwareRunning,
+    process_active: hardwareProcess !== null,
+    process_pid: hardwareProcess ? hardwareProcess.pid : null
   });
 });
 

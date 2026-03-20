@@ -111,6 +111,54 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+  const startHardware = async () => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/start`;
+      const res = await fetch(apiUrl, { method: 'POST' });
+      const result = await res.json();
+      if (res.ok) {
+        console.log('Hardware process started:', result);
+        return result;
+      } else {
+        console.error('Failed to start hardware:', result);
+        return result;
+      }
+    } catch (err) {
+      console.error('Hardware start error:', err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  const stopHardware = async () => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/stop`;
+      const res = await fetch(apiUrl, { method: 'POST' });
+      const result = await res.json();
+      if (res.ok) {
+        console.log('Hardware process stopped:', result);
+        return result;
+      } else {
+        console.error('Failed to stop hardware:', result);
+        return result;
+      }
+    } catch (err) {
+      console.error('Hardware stop error:', err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  const getHardwareStatus = async () => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/status`;
+      const res = await fetch(apiUrl);
+      const result = await res.json();
+      return result;
+    } catch (err) {
+      console.error('Hardware status error:', err);
+      return { running: false, process_active: false };
+    }
+  };
+
   const stopSessionImmediately = async () => {
     if (!sessionActive && !sessionPaused) return;
     setHardwareAlert('Stopped due to limit or temperature condition.');
@@ -205,7 +253,7 @@ function Dashboard({ user, onLogout }) {
       const anyDetected = data.small || data.medium || data.large || data.defective || data.detectedSize;
       if (!anyDetected && settings.showNoMangoPopup) {
         setShowNoMangoPopup(true);
-        setTimeout(() => setShowNoMangoPopup(false), 1600);
+        setTimeout(() => setShowNoMangoPopup(false), 2500);
       } else {
         setShowNoMangoPopup(false);
       }
@@ -759,6 +807,7 @@ function Dashboard({ user, onLogout }) {
       }
 
       await controlConveyor('start');
+      await startHardware();
       fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
@@ -776,6 +825,7 @@ function Dashboard({ user, onLogout }) {
     setSessionPaused(false);
     setHardwareAlert('Continuing existing batch');
     await controlConveyor('start');
+    await startHardware();
   };
 
   const endBatch = async () => {
@@ -805,6 +855,7 @@ function Dashboard({ user, onLogout }) {
       });
       if (res.ok) {
         await controlConveyor('stop');
+        await stopHardware();
         setSessionActive(false);
         setSessionPaused(false);
         setCurrentSessionId(null);
@@ -846,6 +897,7 @@ function Dashboard({ user, onLogout }) {
       });
       if (res.ok) {
         await controlConveyor('stop');
+        await stopHardware();
         setSessionActive(false);
         setSessionPaused(true);
         setHardwareAlert('Batch paused - you may continue or stop batch');
