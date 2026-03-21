@@ -889,35 +889,15 @@ app.post('/api/webrtc-offer', async (req, res) => {
 
 let conveyorProcess = null;
 
-app.post('/api/conveyor', (req, res) => {
-  const action = req.body?.action;
-
-  if (action === 'start' || action === 'continue') {
-    // Ensure hardware controller is active and set running state
-    const startResult = startHardwareProcess();
-    writeHardwareControlFile(true);
-    const status = startResult.success ? 200 : 500;
-    return res.status(status).json({
-      success: startResult.success,
-      message: startResult.message || 'Hardware controller started and conveyor enabled'
-    });
+app.post('/api/conveyor', async (req, res) => {
+  try {
+    const action = req.body?.action;
+    await axios.post(`${PYTHON_API_BASE_URL}/control`, { action });
+    res.json({ success: true, message: `Conveyor ${action} command sent` });
+  } catch (error) {
+    console.error('Error controlling conveyor:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to control conveyor' });
   }
-
-  if (action === 'stop') {
-    // Pause conveyor and keep controller ready (or fully stop if needed)
-    writeHardwareControlFile(false);
-    if (conveyorProcess) {
-      try {
-        process.kill(-conveyorProcess.pid, 'SIGTERM');
-      } catch (err) {
-        console.error('Error stopping conveyor subprocess:', err);
-      }
-      conveyorProcess = null;
-    }
-    return res.json({ success: true, message: 'Conveyor stopped and hardware paused' });
-  }
-
-  return res.status(400).json({ success: false, message: 'Invalid action' });
 });
 
 // New hardware pause/continue controls for direct run-state changes
