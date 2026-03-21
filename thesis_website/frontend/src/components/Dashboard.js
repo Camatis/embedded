@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { jsPDF } from 'jspdf';
-import axios from 'axios'; // <-- Added Axios for hardware communication
 import './Dashboard.css';
 
 function Dashboard({ user, onLogout }) {
@@ -38,10 +37,6 @@ function Dashboard({ user, onLogout }) {
   const pcRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
-  
-  // --- NEW: Hardware Control State ---
-  const [hardwareState, setHardwareState] = useState('STOPPED');
-
   const defaultSettings = {
     limitSmall: 100,
     limitMedium: 100,
@@ -96,17 +91,96 @@ function Dashboard({ user, onLogout }) {
   //track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
 
-  // --- NEW: Hardware Communication Bridge ---
-  const sendHardwareCommand = async (action) => {
+  const controlGate = async (gate, action) => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/control`;
-      const response = await axios.post(apiUrl, { action });
-      if (response.data.success) {
-        setHardwareState(response.data.state);
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gate, action })
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        console.error('Gate control failed', result);
       }
-    } catch (error) {
-      console.error(`Failed to send ${action} command:`, error);
-      alert("Error communicating with hardware controller. Is the backend running?");
+      return result;
+    } catch (err) {
+      console.error('Gate control error', err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  const controlConveyor = async (action) => {
+    try {
+      let endpoint = '/api/hardware/conveyor';
+      if (action === 'pause') {
+        endpoint = '/api/hardware/pause';
+      } else if (action === 'continue') {
+        endpoint = '/api/hardware/continue';
+      }
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000${endpoint}`;
+      const payload = action === 'pause' || action === 'continue' ? {} : { action };
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        console.error('Conveyor control failed', result);
+      }
+      return result;
+    } catch (err) {
+      console.error('Conveyor control error', err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  const startHardware = async () => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/start`;
+      const res = await fetch(apiUrl, { method: 'POST' });
+      const result = await res.json();
+      if (res.ok) {
+        console.log('Hardware process started:', result);
+        return result;
+      } else {
+        console.error('Failed to start hardware:', result);
+        return result;
+      }
+    } catch (err) {
+      console.error('Hardware start error:', err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  const stopHardware = async () => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/stop`;
+      const res = await fetch(apiUrl, { method: 'POST' });
+      const result = await res.json();
+      if (res.ok) {
+        console.log('Hardware process stopped:', result);
+        return result;
+      } else {
+        console.error('Failed to stop hardware:', result);
+        return result;
+      }
+    } catch (err) {
+      console.error('Hardware stop error:', err);
+      return { success: false, message: err.message };
+    }
+  };
+
+  const getHardwareStatus = async () => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/status`;
+      const res = await fetch(apiUrl);
+      const result = await res.json();
+      return result;
+    } catch (err) {
+      console.error('Hardware status error:', err);
+      return { running: false, process_active: false };
     }
   };
 
@@ -115,7 +189,6 @@ function Dashboard({ user, onLogout }) {
     setHardwareAlert('Stopped due to limit or temperature condition.');
     await endBatch();
   };
-  
   const checkLimits = (stats) => {
     if (settings.limitSmall && stats.small >= settings.limitSmall) {
       setLimitAlert('Amount limit reached: small mangoes');
@@ -194,12 +267,14 @@ function Dashboard({ user, onLogout }) {
   //process sensor data and update stats
   const handleSensorData = (data) => {
     try {
+      //update sensor states
       setSensorStates(prev => ({
         small: { ...prev.small, detecting: data.small },
         medium: { ...prev.medium, detecting: data.medium },
         large: { ...prev.large, detecting: data.large }
       }));
 
+      //show no mango popup if needed
       const anyDetected = data.small || data.medium || data.large || data.defective || data.detectedSize;
       if (!anyDetected && settings.showNoMangoPopup) {
         setShowNoMangoPopup(true);
@@ -208,6 +283,7 @@ function Dashboard({ user, onLogout }) {
         setShowNoMangoPopup(false);
       }
 
+      //only update counts when session is active
       if (!sessionActive || sessionPaused) {
         if (data.defective) {
           setDetectedSize('DEFECTIVE');
@@ -220,6 +296,7 @@ function Dashboard({ user, onLogout }) {
         return;
       }
 
+      //check if defective
       if (data.defective) {
         setIsDefective(true);
         setIsDefectiveFlag(true);
@@ -227,7 +304,7 @@ function Dashboard({ user, onLogout }) {
         console.log('🚨 Defective detected! Adding to count.');
         setSortingStats(prev => {
           const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
-          countsRef.current = updated;
+          countsRef.current = updated;  //keep ref synced
           checkLimits(updated);
           return updated;
         });
@@ -235,6 +312,7 @@ function Dashboard({ user, onLogout }) {
         setIsDefective(false);
         setIsDefectiveFlag(false);
 
+        // normalize detectedSize from servotest.py (string) to numeric index for UI counters
         let sizeIndex = null;
         if (typeof data.detectedSize === 'string') {
           const mapped = data.detectedSize.trim().toUpperCase();
@@ -277,6 +355,7 @@ function Dashboard({ user, onLogout }) {
             setDetectedSize('NONE');
         }
 
+        //add to history
         if (sizeIndex >= 1 && sizeIndex <= 3) {
           const timestamp = new Date().toLocaleTimeString();
           setSortingHistory(prev => {
@@ -293,7 +372,9 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+  //poll sensor data
   useEffect(() => {
+    //mark sensors active
     setSensorStates(prev => ({
       small: { ...prev.small, status: 'Active' },
       medium: { ...prev.medium, status: 'Active' },
@@ -303,11 +384,12 @@ function Dashboard({ user, onLogout }) {
     let mounted = true;
     const pollSensorData = async () => {
       try {
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/sensors`;
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/sensors`;
         const res = await fetch(apiUrl);
         if (!res.ok) return;
         const data = await res.json();
         
+        // Check if we actually got data
         if (!data || Object.keys(data).length === 0) return;
 
         const normalized = {
@@ -318,6 +400,7 @@ function Dashboard({ user, onLogout }) {
           detectedSize: data.detectedSize
         };
         
+        // Log received data for debugging
         if (data.defective) console.log('📡 Received from backend - DEFECTIVE:', data);
 
         if (mounted) handleSensorData(normalized);
@@ -326,7 +409,9 @@ function Dashboard({ user, onLogout }) {
       }
     };
 
+    // poll every 500ms to reduce CPU load and improve responsiveness on low-end devices
     const intervalId = setInterval(pollSensorData, 500);
+    // initial immediate poll
     pollSensorData();
 
     return () => {
@@ -340,6 +425,7 @@ function Dashboard({ user, onLogout }) {
     };
   }, []);
 
+  // CPU temperature monitor (RPi read from /sys/class/thermal/thermal_zone0/temp)
   useEffect(() => {
     const fetchTemp = async () => {
       try {
@@ -371,6 +457,7 @@ function Dashboard({ user, onLogout }) {
             setShowTempPopup(false);
           }
         } else {
+          // fallback to simulated value when no real sensor available
           setCpuTemp(prevTemp => {
             let nextTemp = prevTemp + (Math.random() * 4 - 1.5);
             nextTemp = Math.max(35, Math.min(92, nextTemp));
@@ -387,14 +474,13 @@ function Dashboard({ user, onLogout }) {
     return () => clearInterval(intervalId);
   }, [stopSessionImmediately]);
 
+    // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
       const res = await fetch(apiUrl);
       if (res.ok) {
-        const data = await res.json();        
-        console.log('📋 Fetched sessions:', data);        
-        setSessions(data);
+        const data = await res.json();        console.log('📋 Fetched sessions:', data);        setSessions(data);
       } else {
         console.error('Failed to fetch sessions');
       }
@@ -407,6 +493,7 @@ function Dashboard({ user, onLogout }) {
     fetchSessions();
   }, []);
 
+  // show tutorial once when user logs in (persisted in localStorage)
   useEffect(() => {
     if (user) {
       const seen = localStorage.getItem('tutorialSeen');
@@ -416,6 +503,7 @@ function Dashboard({ user, onLogout }) {
     }
   }, [user]);
 
+  // Delete all sessions on backend and clear local state
   const clearSessions = async () => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions`;
@@ -430,6 +518,7 @@ function Dashboard({ user, onLogout }) {
         await fetchSessions();
       } else {
         console.error('Failed to clear sessions');
+        // fallback: clear UI state to avoid stale views
         setSessions([]);
         setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
       }
@@ -467,6 +556,7 @@ function Dashboard({ user, onLogout }) {
       const margin = 18;
       let y = 28;
 
+      // App gradient style from AuthStyles (header and subheader gradient bands)
       doc.setFillColor(253, 184, 19);
       doc.rect(0, 0, 297, 10, 'F');
       doc.setFillColor(253, 141, 19);
@@ -474,6 +564,7 @@ function Dashboard({ user, onLogout }) {
       doc.setFillColor(107, 168, 47);
       doc.rect(0, 18, 297, 8, 'F');
 
+      // Add login logo from public asset
       try {
         const logoDataUrl = await loadImageDataUrl('/login.png');
         doc.addImage(logoDataUrl, 'PNG', 250, 8, 34, 34);
@@ -491,6 +582,7 @@ function Dashboard({ user, onLogout }) {
       doc.setFont('helvetica', 'normal');
       doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
 
+      // Place metadata below header
       y = 44;
       const username = user?.username || 'vince@email.com';
       const today = new Date();
@@ -535,6 +627,7 @@ function Dashboard({ user, onLogout }) {
       const tableWidth = colW.reduce((a, b) => a + b, 0);
       let x = margin;
 
+      // Header background
       doc.setFillColor(230, 230, 230);
       doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
 
@@ -554,6 +647,7 @@ function Dashboard({ user, onLogout }) {
         if (y > 270) {
           doc.addPage();
           y = 18;
+          // repeat header on new page
           x = margin;
           doc.setFillColor(230, 230, 230);
           doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
@@ -567,6 +661,7 @@ function Dashboard({ user, onLogout }) {
           x = margin;
         }
 
+        // alternating row stripes
         if (idx % 2 === 0) {
           doc.setFillColor(245, 245, 255);
           doc.rect(margin - 2, y - 4.5, tableWidth + 4, 7.5, 'F');
@@ -601,16 +696,21 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+
+  // Inline rename handlers for session batch
+  // startEditing: enable edit mode for a session
   const startEditing = (id, currentName) => {
     setEditingSessionId(id);
     setEditingName(currentName || '');
   };
 
+  // cancelEditing: exit edit mode without saving
   const cancelEditing = () => {
     setEditingSessionId(null);
     setEditingName('');
   };
 
+  // saveEditing: persist edited session name to backend
   const saveEditing = async (id) => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sessions/${id}`;
@@ -631,9 +731,12 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
-  // --- UPDATED: Hardware Control Actions ---
+  // handleToggleSession: start or stop a sorting session (POST / PUT)
+  // handleToggleSession: start or stop a sorting session (POST / PUT)
+  // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
+      // fast UI response
       const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
       setSortingStats(initialCounts);
       countsRef.current = initialCounts;
@@ -668,8 +771,18 @@ function Dashboard({ user, onLogout }) {
         setHardwareAlert(`Started offline, sync pending${errorText ? ': ' + errorText : ''}`);
       }
 
-      // 1. Tell Python to RUN
-      await sendHardwareCommand('start');
+      // Start the sorting process
+      try {
+        await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'start' })
+        });
+      } catch (err) {
+        console.error('Error starting sorting process:', err);
+      }
+
+      await controlConveyor('start');
       fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
@@ -687,8 +800,18 @@ function Dashboard({ user, onLogout }) {
     setSessionPaused(false);
     setHardwareAlert('Continuing existing batch');
 
-    // 2. Tell Python to resume RUNNING
-    await sendHardwareCommand('start');
+    // Continue the sorting process
+    try {
+      await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'continue' })
+      });
+    } catch (err) {
+      console.error('Error continuing sorting process:', err);
+    }
+
+    await controlConveyor('continue');
   };
 
   const endBatch = async () => {
@@ -717,9 +840,18 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
-        // 3. Tell Python to STOP
-        await sendHardwareCommand('stop');
+        // Stop the sorting process
+        try {
+          await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'stop' })
+          });
+        } catch (err) {
+          console.error('Error stopping sorting process:', err);
+        }
         
+        await controlConveyor('stop');
         setSessionActive(false);
         setSessionPaused(false);
         setCurrentSessionId(null);
@@ -760,9 +892,18 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
-        // 4. Tell Python to PAUSE
-        await sendHardwareCommand('pause');
-        
+        // Pause the sorting process
+        try {
+          await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'pause' })
+          });
+        } catch (err) {
+          console.error('Error pausing sorting process:', err);
+        }
+
+        await controlConveyor('pause');
         setSessionActive(false);
         setSessionPaused(true);
         setHardwareAlert('Batch paused - you may continue or stop batch');
@@ -775,6 +916,18 @@ function Dashboard({ user, onLogout }) {
     }
   };
 
+  const handleToggleSession = async () => {
+    if (sessionActive) {
+      await pauseBatch();
+    } else if (sessionPaused && currentSessionId) {
+      continueBatch();
+    } else {
+      await startNewSession();
+    }
+  };
+
+  // Close sidebar overlay when clicking outside of it
+  // Keeps menu state consistent with user interactions
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (!menuOpen) return;
@@ -786,6 +939,7 @@ function Dashboard({ user, onLogout }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [menuOpen]);
 
+  // Render dashboard with three views controlled by `currentView`
   return (
     <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
       {showTutorial && (
@@ -887,16 +1041,7 @@ function Dashboard({ user, onLogout }) {
             </div>
 
             <div className="system-controls">
-              <h3>
-                System Controls 
-                <span style={{ 
-                  marginLeft: '10px', 
-                  fontSize: '14px', 
-                  color: hardwareState === 'RUNNING' ? '#4caf50' : hardwareState === 'PAUSED' ? '#ff9800' : '#f44336'
-                }}>
-                  ({hardwareState})
-                </span>
-              </h3>
+              <h3>System Controls</h3>
               {isDefectiveFlag && <div style={{ color: 'red', fontWeight: 700, marginBottom: '8px' }}>DEFECTIVE</div>}
               <div className="system-control-actions">
                 <button
