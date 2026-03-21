@@ -311,8 +311,19 @@ function Dashboard({ user, onLogout }) {
       } else {
         setIsDefective(false);
         setIsDefectiveFlag(false);
-        //update size based on hardware
-        switch(data.detectedSize) {
+
+        // normalize detectedSize from servotest.py (string) to numeric index for UI counters
+        let sizeIndex = null;
+        if (typeof data.detectedSize === 'string') {
+          const mapped = data.detectedSize.trim().toUpperCase();
+          if (mapped === 'SMALL') sizeIndex = 1;
+          else if (mapped === 'MEDIUM') sizeIndex = 2;
+          else if (mapped === 'LARGE') sizeIndex = 3;
+        } else if (typeof data.detectedSize === 'number') {
+          sizeIndex = data.detectedSize;
+        }
+
+        switch (sizeIndex) {
           case 1:
             setDetectedSize('SMALL');
             setSortingStats(prev => {
@@ -343,19 +354,18 @@ function Dashboard({ user, onLogout }) {
           default:
             setDetectedSize('NONE');
         }
-      }
 
-      //add to history
-      if (data.detectedSize >= 1 && data.detectedSize <= 3) {
-        const timestamp = new Date().toLocaleTimeString();
-        setSortingHistory(prev => {
-          const newHistory = [...prev, {
-            timestamp,
-            size: data.detectedSize === 1 ? 'SMALL' : data.detectedSize === 2 ? 'MEDIUM' : 'LARGE'
-          }];
-          //keep last 100 entries
-          return newHistory.slice(-100);
-        });
+        //add to history
+        if (sizeIndex >= 1 && sizeIndex <= 3) {
+          const timestamp = new Date().toLocaleTimeString();
+          setSortingHistory(prev => {
+            const newHistory = [...prev, {
+              timestamp,
+              size: sizeIndex === 1 ? 'SMALL' : sizeIndex === 2 ? 'MEDIUM' : 'LARGE'
+            }];
+            return newHistory.slice(-100);
+          });
+        }
       }
     } catch (error) {
       console.error('Error processing sensor data:', error);
@@ -1108,34 +1118,6 @@ function Dashboard({ user, onLogout }) {
             </div>
             <p style={{ marginTop: '8px', color: cpuTemp >= 85 ? '#b71c1c' : cpuTemp >= 80 ? '#ff6f00' : cpuTemp >= 70 ? '#f57c00' : '#333' }}>{hardwareStatus}: {hardwareAlert}</p>
           </div>
-            <div className="hardware-controls" style={{ marginTop: '20px' }}>
-                <h3>Manual Hardware Control</h3>
-                <div className="control-group">
-                    <h4>Conveyor</h4>
-                    <button onClick={() => controlConveyor('start')}>Start</button>
-                    <button onClick={() => controlConveyor('stop')}>Stop</button>
-                </div>
-                <div className="control-group">
-                    <h4>Barrier Gate</h4>
-                    <button onClick={() => controlGate('barrier', 'open')}>Open</button>
-                    <button onClick={() => controlGate('barrier', 'close')}>Close</button>
-                </div>
-                <div className="control-group">
-                    <h4>Small Gate</h4>
-                    <button onClick={() => controlGate('small', 'open')}>Open</button>
-                    <button onClick={() => controlGate('small', 'close')}>Close</button>
-                </div>
-                <div className="control-group">
-                    <h4>Medium Gate</h4>
-                    <button onClick={() => controlGate('medium', 'open')}>Open</button>
-                    <button onClick={() => controlGate('medium', 'close')}>Close</button>
-                </div>
-                <div className="control-group">
-                    <h4>Large Gate</h4>
-                    <button onClick={() => controlGate('large', 'open')}>Open</button>
-                    <button onClick={() => controlGate('large', 'close')}>Close</button>
-                </div>
-            </div>
         </div>
           </>
         ) : currentView === 'change-password' ? (
