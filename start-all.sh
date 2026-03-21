@@ -1,123 +1,90 @@
-#!/usr/bin/env bash
+# To Run: ./start-all.sh
+# Stop: Press Ctrl+C
 
-# To run: ./start-all.sh
-# Stop: press Ctrl+C
-
-set -euo pipefail
-IFS=$'\n\t'
-
+set -e
 echo "Starting Mango Sorter System..."
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TMP_LOG_DIR="/tmp"
-mkdir -p "$TMP_LOG_DIR"
+# Create control file for hardware
+mkdir -p /tmp
+echo '{"running": false}' > /tmp/mangosort_control.json
 
-CONTROL_FILE="$TMP_LOG_DIR/mangosort_control.json"
-echo '{"running": false}' > "$CONTROL_FILE"
+# for starting Backend (Node.js)
+echo "Starting Backend..."
+cd /home/thesis/embedded/thesis_website/backend
+npm install > /dev/null 2>&1 || { echo " Backend npm install failed"; exit 1; }
+npm start > /tmp/backend.log 2>&1 &
+BACKEND_PID=$!
+echo "   ✓ Backend PID: $BACKEND_PID"
 
-BACKEND_DIR="$ROOT_DIR/thesis_website/backend"
-FRONTEND_DIR="$ROOT_DIR/thesis_website/frontend"
+# Wait for backend to start
+sleep 4
 
-log_and_start() {
-  local name=$1
-  local cmd=$2
-  local log=$3
+# for starting Frontend (React)
+echo "Starting Frontend..."
+cd /home/thesis/embedded/thesis_website/frontend
+npm install > /dev/null 2>&1 || { echo " Frontend npm install failed"; exit 1; }
+GENERATE_SOURCEMAP=false npm start > /tmp/frontend.log 2>&1 &
+FRONTEND_PID=$!
+echo "   ✓ Frontend PID: $FRONTEND_PID"
 
-  echo "Starting $name..."
-  eval "$cmd" > "$log" 2>&1 &
-  local pid=$!
-  echo "   ✓ $name PID: $pid"
-  echo "$pid"
-}
+# Wait for frontend to start
+sleep 5
 
-wait_for_port() {
-  local host=$1
-  local port=$2
-  local timeout=${3:-20}
-  local start
-  start=$(date +%s)
-  while ! nc -z "$host" "$port" >/dev/null 2>&1; do
-    if (( $(date +%s) - start >= timeout )); then
-      echo "ERROR: $host:$port not available after $timeout seconds" >&2
-      return 1
-    fi
-    sleep 1
-  done
-  return 0
-}
-
-cd "$BACKEND_DIR"
-if [ -f package.json ]; then
-  npm ci --silent --no-audit || npm install --silent --no-audit
+# for starting Temperature Monitor
+echo "Starting Temperature Monitor..."
+if [ -f /home/thesis/embedded/temp_monitor.py ]; then
+  python3 /home/thesis/embedded/temp_monitor.py > /tmp/temp_monitor.log 2>&1 &
+  TEMP_MONITOR_PID=$!
+  echo "   ✓ Temp Monitor PID: $TEMP_MONITOR_PID"
 else
-  echo "ERROR: package.json not found in $BACKEND_DIR" >&2
-  exit 1
-fi
-BACKEND_PID=$(log_and_start "Backend" "npm start" "$TMP_LOG_DIR/backend.log")
-
-if ! wait_for_port "127.0.0.1" 5000 20; then
-  echo "Backend did not start in time." >&2
-  exit 1
+  echo "   ⚠ temp_monitor.py not found (optional)"
 fi
 
-cd "$FRONTEND_DIR"
-if [ -f package.json ]; then
-  npm ci --silent --no-audit || npm install --silent --no-audit
+# for starting Camera Stream (MJPEG)
+echo "Starting Camera Stream..."
+if [ -f /home/thesis/embedded/cam_stream.py ]; then
+  python3 /home/thesis/embedded/cam_stream.py > /tmp/cam_stream.log 2>&1 &
+  CAM_STREAM_PID=$!
+  echo "   ✓ Cam Stream PID: $CAM_STREAM_PID"
 else
-  echo "ERROR: package.json not found in $FRONTEND_DIR" >&2
-  exit 1
-fi
-FRONTEND_PID=$(log_and_start "Frontend" "GENERATE_SOURCEMAP=false npm start" "$TMP_LOG_DIR/frontend.log")
-
-# optional processes
-TEMP_MONITOR_PID=""
-if [ -f "$ROOT_DIR/temp_monitor.py" ]; then
-  TEMP_MONITOR_PID=$(log_and_start "Temp Monitor" "python3 '$ROOT_DIR/temp_monitor.py'" "$TMP_LOG_DIR/temp_monitor.log")
-  echo "   ✓ Waiting for temp monitor.."
-  sleep 1
+  echo "   ⚠ cam_stream.py not found (optional)"
 fi
 
-CAM_STREAM_PID=""
-if [ -f "$ROOT_DIR/cam_stream.py" ]; then
-  CAM_STREAM_PID=$(log_and_start "Cam Stream" "python3 '$ROOT_DIR/cam_stream.py'" "$TMP_LOG_DIR/cam_stream.log")
-  echo "   ✓ MJPEG stream available at http://127.0.0.1:8081/mjpeg"
-  echo "   ✓ WebRTC offer endpoint at http://127.0.0.1:8081/offer"
-  sleep 1
-fi
 
-cat <<EOF
+echo ""
+echo "════════════════════════════════════════════════════"
+echo "✓ All services started successfully!"
+echo "════════════════════════════════════════════════════"
+echo ""
+echo "Access the system:"
+echo "   🌐 Frontend:  http://raspberrypi.local:3000"
+echo "   🔧 Backend API:  http://localhost:5000"
+echo "   📷 MJPEG Stream:  http://localhost:8081/mjpeg"
+echo ""
+echo "Monitor logs in real-time:"
+echo "   tail -f /tmp/backend.log"
+echo "   tail -f /tmp/frontend.log"
+echo "   tail -f /tmp/temp_monitor.log"
+echo "   tail -f /tmp/cam_stream.log"
+echo ""
+echo "Camera troubleshooting:"
+echo "   • Check if camera enabled: raspi-config → Interface → Camera"
+echo "   • Test OpenCV: python3 -c \"import cv2; cap = cv2.VideoCapture(0); print('OK' if cap.isOpened() else 'FAIL')\""
+echo "   • View MJPEG stream: curl http://localhost:8081/mjpeg"
+echo "   • View camera logs: tail -f /tmp/cam_stream.log"
+echo ""
+echo "Dashboard Features:"
+echo "   • Click 'Start New Batch' to begin (spawns hardware_controller.py)"
+echo "   • Click 'Pause Batch' to pause (hardware stops)"
+echo "   • Click 'Continue Batch' to resume (hardware restarts)"
+echo "   • Click 'Stop Batch' to finish (hardware stops)"
+echo ""
+echo "Press Ctrl+C to stop all services..."
+echo "════════════════════════════════════════════════════"
+echo ""
 
-════════════════════════════════════════════════════
-✓ All services started successfully!
-════════════════════════════════════════════════════
+# Kill all services using Ctrl+C
+trap "echo ''; echo 'Shutting down all services...'; kill $BACKEND_PID $FRONTEND_PID $TEMP_MONITOR_PID $CAM_STREAM_PID 2>/dev/null; echo 'All services stopped.'; exit 0" INT
 
-Access the system:
-   🌐 Frontend:  http://localhost:3000
-   🔧 Backend API:  http://localhost:5000
-   📷 MJPEG stream:  http://localhost:8081/mjpeg
-   📷 WebRTC endpoint:  http://localhost:8081/offer
-
-Monitor logs in real-time:
-   tail -f /tmp/backend.log /tmp/frontend.log /tmp/temp_monitor.log /tmp/cam_stream.log
-
-Dashboard controls:
-   Start = POST /api/hardware/start
-   Pause = POST /api/hardware/pause
-   Continue = POST /api/hardware/continue
-   Stop = POST /api/hardware/stop
-
-Press Ctrl+C to stop all services.
-════════════════════════════════════════════════════
-EOF
-
-cleanup() {
-  echo "\nShutting down all services..."
-  kill ${BACKEND_PID:-} ${FRONTEND_PID:-} ${TEMP_MONITOR_PID:-} ${CAM_STREAM_PID:-} 2>/dev/null || true
-  echo "All services stopped."
-}
-
-trap cleanup INT TERM EXIT
-
-# keep script alive while background jobs run
 wait
 
