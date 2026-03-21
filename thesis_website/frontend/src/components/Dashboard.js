@@ -23,7 +23,6 @@ function Dashboard({ user, onLogout }) {
   //defective flag
   const [isDefective, setIsDefective] = useState(false);
   const [sortingHistory, setSortingHistory] = useState([]);
-  const [showNoMangoPopup, setShowNoMangoPopup] = useState(false);
   //session and batch management
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
@@ -42,7 +41,6 @@ function Dashboard({ user, onLogout }) {
     limitMedium: 100,
     limitLarge: 100,
     limitDefective: 20,
-    showNoMangoPopup: true,
     enablePiStream: false,
     piStreamUrl: ''
   };
@@ -273,15 +271,6 @@ function Dashboard({ user, onLogout }) {
         medium: { ...prev.medium, detecting: data.medium },
         large: { ...prev.large, detecting: data.large }
       }));
-
-      //show no mango popup if needed
-      const anyDetected = data.small || data.medium || data.large || data.defective || data.detectedSize;
-      if (!anyDetected && settings.showNoMangoPopup) {
-        setShowNoMangoPopup(true);
-        setTimeout(() => setShowNoMangoPopup(false), 2500);
-      } else {
-        setShowNoMangoPopup(false);
-      }
 
       //only update counts when session is active
       if (!sessionActive || sessionPaused) {
@@ -976,16 +965,6 @@ function Dashboard({ user, onLogout }) {
         </div>
       )}
 
-      {showNoMangoPopup && (
-        <div className="tutorial-overlay" onClick={() => setShowNoMangoPopup(false)}>
-          <div className="tutorial-box">
-            <div className="tutorial-close" onClick={() => setShowNoMangoPopup(false)}>✕</div>
-            <h3 style={{ color: '#1565c0' }}>No Mangoes Detected</h3>
-            <p>No mangoes are in view of the camera currently. Please check the conveyor and camera alignment.</p>
-          </div>
-        </div>
-      )}
-      
       <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
           <div className="menu-inner">
             <div className="user-avatar">
@@ -1214,14 +1193,6 @@ function Dashboard({ user, onLogout }) {
                     Defective mango limit:
                     <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
                   </label>
-                </div>
-                <div className="settings-popup-toggle">
-                  <input
-                    type="checkbox"
-                    checked={settings.showNoMangoPopup}
-                    onChange={e => setSettings(s => ({ ...s, showNoMangoPopup: e.target.checked }))}
-                  />
-                  <span>Show "No Mangoes Detected" popup</span>
                 </div>
               </div>
 
