@@ -771,6 +771,17 @@ function Dashboard({ user, onLogout }) {
         setHardwareAlert(`Started offline, sync pending${errorText ? ': ' + errorText : ''}`);
       }
 
+      // Start the sorting process
+      try {
+        await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'start' })
+        });
+      } catch (err) {
+        console.error('Error starting sorting process:', err);
+      }
+
       await controlConveyor('start');
       fetchSessions();
     } catch (err) {
@@ -788,6 +799,18 @@ function Dashboard({ user, onLogout }) {
     setSessionActive(true);
     setSessionPaused(false);
     setHardwareAlert('Continuing existing batch');
+
+    // Continue the sorting process
+    try {
+      await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'continue' })
+      });
+    } catch (err) {
+      console.error('Error continuing sorting process:', err);
+    }
+
     await controlConveyor('continue');
   };
 
@@ -817,6 +840,17 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
+        // Stop the sorting process
+        try {
+          await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'stop' })
+          });
+        } catch (err) {
+          console.error('Error stopping sorting process:', err);
+        }
+        
         await controlConveyor('stop');
         setSessionActive(false);
         setSessionPaused(false);
@@ -858,6 +892,17 @@ function Dashboard({ user, onLogout }) {
         })
       });
       if (res.ok) {
+        // Pause the sorting process
+        try {
+          await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/control`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'pause' })
+          });
+        } catch (err) {
+          console.error('Error pausing sorting process:', err);
+        }
+
         await controlConveyor('pause');
         setSessionActive(false);
         setSessionPaused(true);
