@@ -53,7 +53,7 @@ for size, pins in GATES.items():
 
 # --- Setup AI ---
 print("Loading YOLO Model...")
-mango_model = YOLO('weights.pt')
+mango_model = YOLO('final_weights.pt')
 cap = cv2.VideoCapture(0)
 
 def rotate_stepper_gate(size_category):
