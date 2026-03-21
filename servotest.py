@@ -159,7 +159,12 @@ def run_ai_check():
 # ==========================================
 # 4. MAIN AUTONOMOUS SENSOR LOOP
 # ==========================================
+# Global control variables for autonomous loop
+sorting_active = False
+sorting_paused = False
+
 def autonomous_loop():
+    global sorting_active, sorting_paused
     print("\n" + "="*45)
     print("     AUTONOMOUS SORTING & AI ACTIVE")
     print("="*45)
@@ -169,6 +174,16 @@ def autonomous_loop():
 
     try:
         while True:
+            # Check if sorting is active
+            if not sorting_active:
+                time.sleep(0.1)
+                continue
+
+            # Check if sorting is paused
+            if sorting_paused:
+                time.sleep(0.1)
+                continue
+
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
                 time.sleep(0.2)  # Let it physically settle
@@ -313,23 +328,68 @@ def control_conveyor():
     return jsonify({'success': True, 'message': f'Conveyor {action} command sent'})
 
 
+@app.route('/control', methods=['POST'])
+def control_sorting():
+    global sorting_active, sorting_paused
+    data = request.get_json()
+    action = data.get('action')
+
+    if action == 'start':
+        sorting_active = True
+        sorting_paused = False
+        conveyor_pwm.ChangeDutyCycle(75)  # Start conveyor
+        return jsonify({'success': True, 'message': 'Sorting started'})
+    elif action == 'stop':
+        sorting_active = False
+        sorting_paused = False
+        conveyor_pwm.ChangeDutyCycle(0)   # Stop conveyor
+        return jsonify({'success': True, 'message': 'Sorting stopped'})
+    elif action == 'pause':
+        sorting_paused = True
+        conveyor_pwm.ChangeDutyCycle(0)   # Stop conveyor
+        return jsonify({'success': True, 'message': 'Sorting paused'})
+    elif action == 'continue':
+        sorting_paused = False
+        conveyor_pwm.ChangeDutyCycle(75)  # Start conveyor
+        return jsonify({'success': True, 'message': 'Sorting continued'})
+    else:
+        return jsonify({'success': False, 'message': 'Invalid action'}), 400
+
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    global sorting_active, sorting_paused
+    return jsonify({
+        'sorting_active': sorting_active,
+        'sorting_paused': sorting_paused,
+        'conveyor_speed': conveyor_pwm.GetDutyCycle() if hasattr(conveyor_pwm, 'GetDutyCycle') else 0
+    })
+
 @app.route('/sensors', methods=['GET'])
 def get_sensors():
-    detected_size = "NONE"
-    if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
-        detected_size = "LARGE"
-    elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW:
-        detected_size = "MEDIUM"
-    elif GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
-        detected_size = "SMALL"
-
-    return jsonify({
-        'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
-        'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
-        'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW,
-        'defective': ai_memory["is_defective"],
-        'detectedSize': detected_size
-    })
+    try:
+        # Read current IR sensor states
+        # GPIO.LOW means sensor is detecting (mango present)
+        trigger_detected = GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW
+        medium_detected = GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW
+        large_detected = GPIO.input(IR_LARGE_PIN) == GPIO.LOW
+        
+        return jsonify({
+            'trigger': trigger_detected,  # Maps to 'small' in frontend
+            'medium': medium_detected,
+            'large': large_detected,
+            'defective': False,  # Will be set by AI detection
+            'detectedSize': None  # Will be set during sorting
+        })
+    except Exception as e:
+        print(f"Error reading sensors: {e}")
+        return jsonify({
+            'trigger': False,
+            'medium': False,
+            'large': False,
+            'defective': False,
+            'detectedSize': None
+        }), 500
 
 
 if __name__ == '__main__':

@@ -50,6 +50,16 @@ else
   echo "   ⚠ cam_stream.py not found (optional)"
 fi
 
+# for starting Servotest (Hardware Control)
+echo "Starting Servotest (Hardware Control)..."
+if [ -f /home/thesis/embedded/servotest.py ]; then
+  python3 /home/thesis/embedded/servotest.py > /tmp/servotest.log 2>&1 &
+  SERVOTEST_PID=$!
+  echo "   ✓ Servotest PID: $SERVOTEST_PID"
+else
+  echo "   ⚠ servotest.py not found"
+fi
+
 
 echo ""
 echo "════════════════════════════════════════════════════"
@@ -60,18 +70,27 @@ echo "Access the system:"
 echo "   🌐 Frontend:  http://raspberrypi.local:3000"
 echo "   🔧 Backend API:  http://localhost:5000"
 echo "   📷 MJPEG Stream:  http://localhost:8081/mjpeg"
+echo "   🤖 Hardware API:  http://localhost:5000"
 echo ""
 echo "Monitor logs in real-time:"
 echo "   tail -f /tmp/backend.log"
 echo "   tail -f /tmp/frontend.log"
 echo "   tail -f /tmp/temp_monitor.log"
 echo "   tail -f /tmp/cam_stream.log"
+echo "   tail -f /tmp/servotest.log"
 echo ""
 echo "Camera troubleshooting:"
 echo "   • Check if camera enabled: raspi-config → Interface → Camera"
 echo "   • Test OpenCV: python3 -c \"import cv2; cap = cv2.VideoCapture(0); print('OK' if cap.isOpened() else 'FAIL')\""
 echo "   • View MJPEG stream: curl http://localhost:8081/mjpeg"
 echo "   • View camera logs: tail -f /tmp/cam_stream.log"
+echo ""
+echo "Servotest troubleshooting:"
+echo "   • Check hardware status: curl http://localhost:5000/sensors"
+echo "   • Test control API: curl -X POST http://localhost:5000/control -H 'Content-Type: application/json' -d '{\"action\":\"start\"}'"
+echo "   • View servotest logs: tail -f /tmp/servotest.log"
+echo "   • Check GPIO pins: gpio readall (pins 17,27,22 for IR sensors)"
+echo "   • Test YOLO model: python3 -c \"from ultralytics import YOLO; model = YOLO('yolov8n.pt'); print('YOLO OK')\""
 echo ""
 echo "Dashboard Features:"
 echo "   • Click 'Start New Batch' to begin (spawns hardware_controller.py)"
@@ -84,7 +103,7 @@ echo "════════════════════════�
 echo ""
 
 # Kill all services using Ctrl+C
-trap "echo ''; echo 'Shutting down all services...'; kill $BACKEND_PID $FRONTEND_PID $TEMP_MONITOR_PID $CAM_STREAM_PID 2>/dev/null; echo 'All services stopped.'; exit 0" INT
+trap "echo ''; echo 'Shutting down all services...'; kill $BACKEND_PID $FRONTEND_PID $TEMP_MONITOR_PID $CAM_STREAM_PID $SERVOTEST_PID 2>/dev/null; echo 'All services stopped.'; exit 0" INT
 
 wait
 

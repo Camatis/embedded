@@ -739,6 +739,18 @@ app.post('/api/hardware/conveyor', async (req, res) => {
     }
 });
 
+// New endpoint to control sorting process
+app.post('/api/hardware/control', async (req, res) => {
+    const { action } = req.body;
+    try {
+        await axios.post(`${PYTHON_API_BASE_URL}/control`, { action });
+        res.json({ success: true, message: `Sorting ${action} command sent` });
+    } catch (error) {
+        console.error('Error controlling sorting:', error.message);
+        res.status(500).json({ success: false, message: 'Failed to control sorting' });
+    }
+});
+
 // New endpoint to get sensor status
 app.get('/api/hardware/sensors', async (req, res) => {
     try {
@@ -911,21 +923,21 @@ app.post('/api/conveyor', (req, res) => {
 // New hardware pause/continue controls for direct run-state changes
 app.post('/api/hardware/pause', async (req, res) => {
   try {
-    await axios.post(`${PYTHON_API_BASE_URL}/conveyor`, { action: 'stop' });
+    await axios.post(`${PYTHON_API_BASE_URL}/control`, { action: 'pause' });
     res.json({ success: true, message: 'Hardware controller paused' });
   } catch (error) {
-    console.error('Error pausing conveyor:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to pause conveyor' });
+    console.error('Error pausing sorting:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to pause sorting' });
   }
 });
 
 app.post('/api/hardware/continue', async (req, res) => {
   try {
-    await axios.post(`${PYTHON_API_BASE_URL}/conveyor`, { action: 'start' });
+    await axios.post(`${PYTHON_API_BASE_URL}/control`, { action: 'continue' });
     res.json({ success: true, message: 'Hardware controller continued' });
   } catch (error) {
-    console.error('Error continuing conveyor:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to continue conveyor' });
+    console.error('Error continuing sorting:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to continue sorting' });
   }
 });
 
