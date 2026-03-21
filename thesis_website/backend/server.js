@@ -7,6 +7,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -95,7 +96,7 @@ function startHardwareProcess() {
 
   try {
     console.log('Starting hardware controller process...');
-    hardwareProcess = spawn('python3', [path.join(__dirname, '..', 'hardware_controller.py')], {
+    hardwareProcess = spawn('python', [path.join(__dirname, '..', '..', 'servotest.py')], {
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -712,6 +713,43 @@ app.get('/api/hardware/status', (req, res) => {
   });
 });
 
+const PYTHON_API_BASE_URL = 'http://localhost:5001';
+
+// New endpoint to control gates
+app.post('/api/hardware/gate', async (req, res) => {
+    const { gate, action } = req.body;
+    try {
+        await axios.post(`${PYTHON_API_BASE_URL}/gate`, { gate, action });
+        res.json({ success: true, message: `Gate ${gate} ${action} command sent` });
+    } catch (error) {
+        console.error('Error controlling gate:', error.message);
+        res.status(500).json({ success: false, message: 'Failed to control gate' });
+    }
+});
+
+// New endpoint to control conveyor
+app.post('/api/hardware/conveyor', async (req, res) => {
+    const { action } = req.body;
+    try {
+        await axios.post(`${PYTHON_API_BASE_URL}/conveyor`, { action });
+        res.json({ success: true, message: `Conveyor ${action} command sent` });
+    } catch (error) {
+        console.error('Error controlling conveyor:', error.message);
+        res.status(500).json({ success: false, message: 'Failed to control conveyor' });
+    }
+});
+
+// New endpoint to get sensor status
+app.get('/api/hardware/sensors', async (req, res) => {
+    try {
+        const response = await axios.get(`${PYTHON_API_BASE_URL}/sensors`);
+        res.json(response.data);
+    } catch (error) {
+        console.error('Error getting sensor data:', error.message);
+        res.status(500).json({ success: false, message: 'Failed to get sensor data' });
+    }
+});
+
 // In-memory storage for latest sensor data (simple, resets on server restart)
 let lastSensorData = {
   small: false,
@@ -871,16 +909,24 @@ app.post('/api/conveyor', (req, res) => {
 });
 
 // New hardware pause/continue controls for direct run-state changes
-app.post('/api/hardware/pause', (req, res) => {
-  writeHardwareControlFile(false);
-  return res.json({ success: true, message: 'Hardware controller paused' });
+app.post('/api/hardware/pause', async (req, res) => {
+  try {
+    await axios.post(`${PYTHON_API_BASE_URL}/conveyor`, { action: 'stop' });
+    res.json({ success: true, message: 'Hardware controller paused' });
+  } catch (error) {
+    console.error('Error pausing conveyor:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to pause conveyor' });
+  }
 });
 
-app.post('/api/hardware/continue', (req, res) => {
-  writeHardwareControlFile(true);
-  const result = startHardwareProcess();
-  const status = result.success ? 200 : 500;
-  return res.status(status).json(result);
+app.post('/api/hardware/continue', async (req, res) => {
+  try {
+    await axios.post(`${PYTHON_API_BASE_URL}/conveyor`, { action: 'start' });
+    res.json({ success: true, message: 'Hardware controller continued' });
+  } catch (error) {
+    console.error('Error continuing conveyor:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to continue conveyor' });
+  }
 });
 
 // Basic route

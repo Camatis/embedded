@@ -91,9 +91,28 @@ function Dashboard({ user, onLogout }) {
   //track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
 
+  const controlGate = async (gate, action) => {
+    try {
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gate, action })
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        console.error('Gate control failed', result);
+      }
+      return result;
+    } catch (err) {
+      console.error('Gate control error', err);
+      return { success: false, message: err.message };
+    }
+  };
+
   const controlConveyor = async (action) => {
     try {
-      let endpoint = '/api/conveyor';
+      let endpoint = '/api/hardware/conveyor';
       if (action === 'pause') {
         endpoint = '/api/hardware/pause';
       } else if (action === 'continue') {
@@ -355,7 +374,7 @@ function Dashboard({ user, onLogout }) {
     let mounted = true;
     const pollSensorData = async () => {
       try {
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/sensor-data`;
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/sensors`;
         const res = await fetch(apiUrl);
         if (!res.ok) return;
         const data = await res.json();
@@ -363,22 +382,12 @@ function Dashboard({ user, onLogout }) {
         // Check if we actually got data
         if (!data || Object.keys(data).length === 0) return;
 
-        // normalize detectedSize (accepts numeric 1/2/3 or string 'Small')
-        let detectedSize = data.detectedSize;
-        if (typeof detectedSize === 'string') {
-          const s = detectedSize.toLowerCase();
-          if (s.startsWith('s')) detectedSize = 1;
-          else if (s.startsWith('m')) detectedSize = 2;
-          else if (s.startsWith('l')) detectedSize = 3;
-          else detectedSize = null;
-        }
-
         const normalized = {
-          small: !!data.small || detectedSize === 1,
-          medium: !!data.medium || detectedSize === 2,
-          large: !!data.large || detectedSize === 3,
+          small: !!data.trigger,
+          medium: !!data.medium,
+          large: !!data.large,
           defective: !!data.defective,
-          detectedSize: detectedSize
+          detectedSize: data.detectedSize
         };
         
         // Log received data for debugging
@@ -1099,6 +1108,34 @@ function Dashboard({ user, onLogout }) {
             </div>
             <p style={{ marginTop: '8px', color: cpuTemp >= 85 ? '#b71c1c' : cpuTemp >= 80 ? '#ff6f00' : cpuTemp >= 70 ? '#f57c00' : '#333' }}>{hardwareStatus}: {hardwareAlert}</p>
           </div>
+            <div className="hardware-controls" style={{ marginTop: '20px' }}>
+                <h3>Manual Hardware Control</h3>
+                <div className="control-group">
+                    <h4>Conveyor</h4>
+                    <button onClick={() => controlConveyor('start')}>Start</button>
+                    <button onClick={() => controlConveyor('stop')}>Stop</button>
+                </div>
+                <div className="control-group">
+                    <h4>Barrier Gate</h4>
+                    <button onClick={() => controlGate('barrier', 'open')}>Open</button>
+                    <button onClick={() => controlGate('barrier', 'close')}>Close</button>
+                </div>
+                <div className="control-group">
+                    <h4>Small Gate</h4>
+                    <button onClick={() => controlGate('small', 'open')}>Open</button>
+                    <button onClick={() => controlGate('small', 'close')}>Close</button>
+                </div>
+                <div className="control-group">
+                    <h4>Medium Gate</h4>
+                    <button onClick={() => controlGate('medium', 'open')}>Open</button>
+                    <button onClick={() => controlGate('medium', 'close')}>Close</button>
+                </div>
+                <div className="control-group">
+                    <h4>Large Gate</h4>
+                    <button onClick={() => controlGate('large', 'open')}>Open</button>
+                    <button onClick={() => controlGate('large', 'close')}>Close</button>
+                </div>
+            </div>
         </div>
           </>
         ) : currentView === 'change-password' ? (
