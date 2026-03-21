@@ -713,7 +713,7 @@ app.get('/api/hardware/status', (req, res) => {
   });
 });
 
-const PYTHON_API_BASE_URL = 'http://localhost:5001';
+const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost:5001';
 
 // New endpoint to control gates
 app.post('/api/hardware/gate', async (req, res) => {
@@ -723,7 +723,7 @@ app.post('/api/hardware/gate', async (req, res) => {
         res.json({ success: true, message: `Gate ${gate} ${action} command sent` });
     } catch (error) {
         console.error('Error controlling gate:', error.message);
-        res.status(500).json({ success: false, message: 'Failed to control gate' });
+        res.json({ success: false, message: 'Hardware server not available' });
     }
 });
 
@@ -735,7 +735,7 @@ app.post('/api/hardware/conveyor', async (req, res) => {
         res.json({ success: true, message: `Conveyor ${action} command sent` });
     } catch (error) {
         console.error('Error controlling conveyor:', error.message);
-        res.status(500).json({ success: false, message: 'Failed to control conveyor' });
+        res.json({ success: false, message: 'Hardware server not available' });
     }
 });
 
@@ -747,7 +747,7 @@ app.post('/api/hardware/control', async (req, res) => {
         res.json({ success: true, message: `Sorting ${action} command sent` });
     } catch (error) {
         console.error('Error controlling sorting:', error.message);
-        res.status(500).json({ success: false, message: 'Failed to control sorting' });
+        res.json({ success: false, message: 'Hardware server not available' });
     }
 });
 
@@ -758,7 +758,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
         res.json(response.data);
     } catch (error) {
         console.error('Error getting sensor data:', error.message);
-        res.status(500).json({ success: false, message: 'Failed to get sensor data' });
+        res.json({ small: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true });
     }
 });
 
@@ -896,7 +896,7 @@ app.post('/api/conveyor', async (req, res) => {
     res.json({ success: true, message: `Conveyor ${action} command sent` });
   } catch (error) {
     console.error('Error controlling conveyor:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to control conveyor' });
+    res.json({ success: false, message: 'Hardware server not available' });
   }
 });
 
@@ -907,7 +907,7 @@ app.post('/api/hardware/pause', async (req, res) => {
     res.json({ success: true, message: 'Hardware controller paused' });
   } catch (error) {
     console.error('Error pausing sorting:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to pause sorting' });
+    res.json({ success: false, message: 'Hardware server not available' });
   }
 });
 
@@ -917,7 +917,7 @@ app.post('/api/hardware/continue', async (req, res) => {
     res.json({ success: true, message: 'Hardware controller continued' });
   } catch (error) {
     console.error('Error continuing sorting:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to continue sorting' });
+    res.json({ success: false, message: 'Hardware server not available' });
   }
 });
 
