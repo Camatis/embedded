@@ -53,6 +53,13 @@ function Dashboard({ user, onLogout }) {
   const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
   const [limitAlert, setLimitAlert] = useState('');
   const [showLimitAlert, setShowLimitAlert] = useState(false);
+  
+  // Gate state tracking
+  const [gateStates, setGateStates] = useState({
+    small: 'closed',
+    medium: 'closed',
+    large: 'closed'
+  });
   const tutorialSteps = [
     {
       title: 'Start a New Batch',
@@ -491,6 +498,32 @@ function Dashboard({ user, onLogout }) {
       }
     }
   }, [user]);
+
+  // Poll gate status for real-time feedback
+  useEffect(() => {
+    let mounted = true;
+    const pollGateStatus = async () => {
+      try {
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`;
+        const res = await fetch(apiUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (mounted && data.gate_states) {
+            setGateStates(data.gate_states);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching gate status', err);
+      }
+    };
+    
+    pollGateStatus();
+    const intervalId = setInterval(pollGateStatus, 1000);
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+    };
+  }, []);
 
   // Delete all sessions on backend and clear local state
   const clearSessions = async () => {
@@ -977,6 +1010,7 @@ function Dashboard({ user, onLogout }) {
               <button type="button" onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
               <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
               <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
+              <button type="button" onClick={() => { setCurrentView('hardware-controls'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-controls' ? 'active' : ''}`}>Hardware Controls</button>
               <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
               <button type="button" onClick={() => { setCurrentView('change-password'); setMenuOpen(false); }} className={`menu-item ${currentView === 'change-password' ? 'active' : ''}`}>Change Password</button>
               <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
@@ -1141,6 +1175,125 @@ function Dashboard({ user, onLogout }) {
               <strong>{cpuTemp.toFixed(1)}°C</strong>
             </div>
             <p style={{ marginTop: '8px', color: cpuTemp >= 85 ? '#b71c1c' : cpuTemp >= 80 ? '#ff6f00' : cpuTemp >= 70 ? '#f57c00' : '#333' }}>{hardwareStatus}: {hardwareAlert}</p>
+          </div>
+        </div>
+          </>
+        ) : currentView === 'hardware-controls' ? (
+          <>
+        {/* Hardware Controls View - Manual Gate Control */}
+        <div className="hardware-controls-container">
+          <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Controls</h2>
+          <p style={{ color: '#666', marginBottom: '20px' }}>Manually operate sorting gates for testing and calibration.</p>
+          
+          <div className="control-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+            
+            {/* Small Gate */}
+            <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.small === 'open' ? '#4caf50' : '#f44336'}` }}>
+              <h3 style={{ marginTop: 0 }}>Small Mango Gate</h3>
+              <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.small === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.small === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="control-button start-button"
+                  onClick={() => {
+                    fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ gate: 'SMALL', action: 'open' })
+                    }).catch(err => console.error('Error:', err));
+                  }}
+                  style={{ flex: 1, padding: '10px' }}
+                  disabled={gateStates.small === 'open'}
+                >
+                  Open
+                </button>
+                <button
+                  className="control-button stop-button"
+                  onClick={() => {
+                    fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ gate: 'SMALL', action: 'close' })
+                    }).catch(err => console.error('Error:', err));
+                  }}
+                  style={{ flex: 1, padding: '10px' }}
+                  disabled={gateStates.small === 'closed'}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {/* Medium Gate */}
+            <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.medium === 'open' ? '#4caf50' : '#f44336'}` }}>
+              <h3 style={{ marginTop: 0 }}>Medium Mango Gate</h3>
+              <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.medium === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.medium === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="control-button start-button"
+                  onClick={() => {
+                    fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ gate: 'MEDIUM', action: 'open' })
+                    }).catch(err => console.error('Error:', err));
+                  }}
+                  style={{ flex: 1, padding: '10px' }}
+                  disabled={gateStates.medium === 'open'}
+                >
+                  Open
+                </button>
+                <button
+                  className="control-button stop-button"
+                  onClick={() => {
+                    fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ gate: 'MEDIUM', action: 'close' })
+                    }).catch(err => console.error('Error:', err));
+                  }}
+                  style={{ flex: 1, padding: '10px' }}
+                  disabled={gateStates.medium === 'closed'}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {/* Large Gate */}
+            <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.large === 'open' ? '#4caf50' : '#f44336'}` }}>
+              <h3 style={{ marginTop: 0 }}>Large Mango Gate</h3>
+              <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.large === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.large === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="control-button start-button"
+                  onClick={() => {
+                    fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ gate: 'LARGE', action: 'open' })
+                    }).catch(err => console.error('Error:', err));
+                  }}
+                  style={{ flex: 1, padding: '10px' }}
+                  disabled={gateStates.large === 'open'}
+                >
+                  Open
+                </button>
+                <button
+                  className="control-button stop-button"
+                  onClick={() => {
+                    fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/hardware/gate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ gate: 'LARGE', action: 'close' })
+                    }).catch(err => console.error('Error:', err));
+                  }}
+                  style={{ flex: 1, padding: '10px' }}
+                  disabled={gateStates.large === 'closed'}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
           </>
