@@ -50,16 +50,6 @@ else
   echo "   ⚠ cam_stream.py not found (optional)"
 fi
 
-# for starting Servotest (Hardware Control)
-echo "Starting Servotest (Hardware Control)..."
-if [ -f /home/thesis/embedded/servotest.py ]; then
-  python3 /home/thesis/embedded/servotest.py > /tmp/servotest.log 2>&1 &
-  SERVOTEST_PID=$!
-  echo "   ✓ Servotest PID: $SERVOTEST_PID"
-else
-  echo "   ⚠ servotest.py not found"
-fi
-
 
 echo ""
 echo "════════════════════════════════════════════════════"
@@ -68,7 +58,7 @@ echo "════════════════════════�
 echo ""
 echo "Access the system:"
 echo "   🌐 Frontend:  http://raspberrypi.local:3000"
-echo "   🔧 Backend API:  http://localhost:5000"
+echo "   🔧 Backend API:  http://localhost:5001"
 echo "   📷 MJPEG Stream:  http://localhost:8081/mjpeg"
 echo "   🤖 Hardware API:  http://localhost:5000"
 echo ""
@@ -77,7 +67,6 @@ echo "   tail -f /tmp/backend.log"
 echo "   tail -f /tmp/frontend.log"
 echo "   tail -f /tmp/temp_monitor.log"
 echo "   tail -f /tmp/cam_stream.log"
-echo "   tail -f /tmp/servotest.log"
 echo ""
 echo "Camera troubleshooting:"
 echo "   • Check if camera enabled: raspi-config → Interface → Camera"
@@ -86,14 +75,14 @@ echo "   • View MJPEG stream: curl http://localhost:8081/mjpeg"
 echo "   • View camera logs: tail -f /tmp/cam_stream.log"
 echo ""
 echo "Servotest troubleshooting:"
-echo "   • Check hardware status: curl http://localhost:5000/sensors"
-echo "   • Test control API: curl -X POST http://localhost:5000/control -H 'Content-Type: application/json' -d '{\"action\":\"start\"}'"
+echo "   • Check hardware status: curl http://localhost:5001/api/hardware/status"
+echo "   • Test control API: curl -X POST http://localhost:5001/api/hardware/start -H 'Content-Type: application/json'"
 echo "   • View servotest logs: tail -f /tmp/servotest.log"
 echo "   • Check GPIO pins: gpio readall (pins 17,27,22 for IR sensors)"
-echo "   • Test YOLO model: python3 -c \"from ultralytics import YOLO; model = YOLO('yolov8n.pt'); print('YOLO OK')\""
+echo "   • Test YOLO model: python3 -c \"from ultralytics import YOLO; model = YOLO('final_weights.pt'); print('YOLO OK')\""
 echo ""
 echo "Dashboard Features:"
-echo "   • Click 'Start New Batch' to begin (spawns hardware_controller.py)"
+echo "   • Click 'Start New Batch' to begin (spawns servotest.py)"
 echo "   • Click 'Pause Batch' to pause (hardware stops)"
 echo "   • Click 'Continue Batch' to resume (hardware restarts)"
 echo "   • Click 'Stop Batch' to finish (hardware stops)"
