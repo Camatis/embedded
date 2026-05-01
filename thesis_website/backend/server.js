@@ -88,19 +88,49 @@ function writeHardwareControlFile(running) {
   }
 }
 
-function startHardwareProcess() {
+async function waitForHardwareReady() {
+  const deadline = Date.now() + HARDWARE_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`, {
+        timeout: HARDWARE_READY_INTERVAL_MS
+      });
+      if (response.status === 200) {
+        return true;
+      }
+    } catch (err) {
+      // ignore and retry until timeout
+    }
+    await new Promise(resolve => setTimeout(resolve, HARDWARE_READY_INTERVAL_MS));
+  }
+  return false;
+}
+
+async function startHardwareProcess() {
+  console.log('Hardware start request received');
   if (hardwareProcess) {
     console.log('Hardware process already running');
     return { success: true, message: 'Hardware already running' };
   }
 
+  if (!fs.existsSync(PYTHON_HARDWARE_SCRIPT)) {
+    const message = `Hardware script not found at ${PYTHON_HARDWARE_SCRIPT}`;
+    console.error(message);
+    return { success: false, message };
+  }
+
   try {
-    console.log('Starting hardware controller process...');
+    console.log('Starting servotest hardware controller process...');
     const pythonCmd = process.env.PYTHON_CMD || 'python3';
     console.log('Using Python command:', pythonCmd);
-    hardwareProcess = spawn(pythonCmd, [path.join(__dirname, '..', '..', 'servotest.py')], {
+    console.log('Servotest script path:', PYTHON_HARDWARE_SCRIPT);
+    hardwareProcess = spawn(pythonCmd, [PYTHON_HARDWARE_SCRIPT], {
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    hardwareProcess.on('spawn', () => {
+      console.log(`Hardware process spawned with PID ${hardwareProcess.pid}`);
     });
 
     hardwareProcess.stdout.on('data', (data) => {
@@ -117,10 +147,26 @@ function startHardwareProcess() {
       hardwareRunning = false;
     });
 
+    const ready = await waitForHardwareReady();
+    if (!ready) {
+      const message = `Hardware did not become ready within ${HARDWARE_READY_TIMEOUT_MS}ms`;
+      console.error(message);
+      if (hardwareProcess) {
+        hardwareProcess.kill('SIGTERM');
+        hardwareProcess = null;
+      }
+      return { success: false, message };
+    }
+
     writeHardwareControlFile(true);
-    return { success: true, message: 'Hardware process started' };
+    hardwareRunning = true;
+    return { success: true, message: `Servotest started and ready at ${PYTHON_API_BASE_URL}` };
   } catch (err) {
     console.error('Failed to start hardware process:', err);
+    if (hardwareProcess) {
+      hardwareProcess.kill('SIGTERM');
+      hardwareProcess = null;
+    }
     return { success: false, message: err.message };
   }
 }
@@ -195,10 +241,13 @@ async function syncUnsyncedBatches() {
     try {
       const raw = fs.readFileSync(filePath, 'utf8');
       const batch = JSON.parse(raw);
-      const session = new Session(batch);
+      // Offline batch stored with custom string _id; remove before saving to Mongo
+      const payload = { ...batch };
+      delete payload._id;
+      const session = new Session(payload);
       await session.save();
       fs.unlinkSync(filePath);
-      console.log(`Synced offline batch ${file}`);
+      console.log(`Synced offline batch ${file} to Mongo with new ObjectId ${session._id}`);
     } catch (err) {
       console.error('Failed to sync batch', file, err);
     }
@@ -559,11 +608,42 @@ app.post('/api/sessions', verifyToken, async (req, res) => {
   }
 });
 
+const isValidSessionObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
 // GET: Fetch a specific session by ID
 app.get('/api/sessions/:id', verifyToken, async (req, res) => {
   try {
-    const session = await Session.findById(req.params.id);
+    let session = null;
+    if (isValidSessionObjectId(req.params.id)) {
+      session = await Session.findById(req.params.id);
+    }
+
     if (!session) {
+      const { userId, userRole } = await getRequestUserContext(req);
+
+      // Try offline in-memory queue first
+      const queueSession = offlineQueue.find(q => q._id === req.params.id);
+      if (queueSession && sessionAccessibleByUser(queueSession, userId, userRole)) {
+        return res.json(queueSession);
+      }
+
+      // Try local offline files
+      const files = fs.existsSync(UNSYNCED_BATCH_DIR)
+        ? fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'))
+        : [];
+      for (const file of files) {
+        const filePath = path.join(UNSYNCED_BATCH_DIR, file);
+        try {
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const batch = JSON.parse(raw);
+          if (batch._id === req.params.id && sessionAccessibleByUser(batch, userId, userRole)) {
+            return res.json(batch);
+          }
+        } catch (e) {
+          console.error('Error reading local session file', file, e);
+        }
+      }
+
       return res.status(404).json({ message: 'Session not found' });
     }
 
@@ -612,7 +692,10 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
     }
 
     const { userId, userRole } = await getRequestUserContext(req);
-    const existingSession = await Session.findById(sessionId);
+    let existingSession = null;
+    if (isValidSessionObjectId(sessionId)) {
+      existingSession = await Session.findById(sessionId);
+    }
     if (existingSession && !sessionAccessibleByUser(existingSession, userId, userRole)) {
       return res.status(403).json({ message: 'Access denied' });
     }
@@ -624,7 +707,9 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
 
     let updatedSession;
     try {
-      updatedSession = await Session.findByIdAndUpdate(sessionId, updateData, { new: true });
+      if (isValidSessionObjectId(sessionId)) {
+        updatedSession = await Session.findByIdAndUpdate(sessionId, updateData, { new: true });
+      }
     } catch (err) {
       console.warn('Cloud update failed for session:', err.message || err);
     }
@@ -772,8 +857,8 @@ app.delete('/api/sessions', verifyToken, async (req, res) => {
 
 // ===== HARDWARE CONTROL ENDPOINTS =====
 // POST: Start hardware controller process
-app.post('/api/hardware/start', (req, res) => {
-  const result = startHardwareProcess();
+app.post('/api/hardware/start', async (req, res) => {
+  const result = await startHardwareProcess();
   const status = result.success ? 200 : 500;
   res.status(status).json(result);
 });
@@ -795,6 +880,9 @@ app.get('/api/hardware/status', (req, res) => {
 });
 
 const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost:5000';
+const PYTHON_HARDWARE_SCRIPT = process.env.PYTHON_HARDWARE_SCRIPT || path.resolve(__dirname, '..', '..', 'servotest.py');
+const HARDWARE_READY_TIMEOUT_MS = Number(process.env.HARDWARE_READY_TIMEOUT_MS) || 5000;
+const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS) || 250;
 
 // New endpoint to control gates
 app.post('/api/hardware/gate', async (req, res) => {

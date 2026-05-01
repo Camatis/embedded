@@ -892,7 +892,9 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert('Batch stopped and finalized');
         setTimeout(() => { fetchSessions(); }, 500);
       } else {
-        console.error('Failed to end batch');
+        const errorText = await res.text();
+        console.error('Failed to end batch', res.status, errorText);
+        setHardwareAlert(`Batch stop failed: ${res.status} ${errorText}`);
       }
     } catch (err) {
       console.error('Error ending batch', err);
