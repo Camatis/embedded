@@ -98,7 +98,7 @@ function startHardwareProcess() {
     console.log('Starting hardware controller process...');
     const pythonCmd = process.env.PYTHON_CMD || 'python3';
     console.log('Using Python command:', pythonCmd);
-    hardwareProcess = spawn(pythonCmd, [path.join(__dirname, '..', '..', 'hardware_controller.py')], {
+    hardwareProcess = spawn(pythonCmd, [path.join(__dirname, '..', '..', 'servotest.py')], {
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -794,7 +794,7 @@ app.get('/api/hardware/status', (req, res) => {
   });
 });
 
-const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost:5001';
+const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost:5000';
 
 // New endpoint to control gates
 app.post('/api/hardware/gate', async (req, res) => {

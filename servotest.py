@@ -70,7 +70,7 @@ time.sleep(1)
 
 # --- AI Setup ---
 print("Loading YOLO AI Brain...")
-model = YOLO("final weights.pt")
+model = YOLO("final_weights.pt")
 
 # ==========================================
 # 2. TIMING VARIABLES 

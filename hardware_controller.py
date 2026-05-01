@@ -37,7 +37,7 @@ for size, pins in GATES.items():
 
 # --- 5. AI Vision ---
 print("Loading YOLO Model...")
-mango_model = YOLO('weights.pt')
+mango_model = YOLO('final_weights.pt')
 cap = cv2.VideoCapture(0)
 
 
