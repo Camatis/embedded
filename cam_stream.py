@@ -16,6 +16,7 @@ The <video> element gets real-time frames from /dev/video0 or libcamera.
 import asyncio
 import cv2
 import numpy as np
+import threading
 from flask import Flask, request, jsonify, Response
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaBlackhole
@@ -27,24 +28,41 @@ import sys
 app = Flask(__name__)
 pcs = set()
 
+# Single shared camera instance and lock to prevent concurrent Picamera2 opens
+camera = None
+camera_lock = threading.Lock()
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
+CAMERA_FPS = 15
+
+
+def init_camera():
+    global camera
+    if camera is not None:
+        return camera
+
+    camera = Picamera2()
+    config = camera.create_video_configuration(main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT)})
+    camera.configure(config)
+    camera.start()
+    print("✓ Shared Picamera2 instance started")
+    return camera
+
+
 # MJPEG stream fallback for web UI (option A)
-def mjpeg_generator(width=640, height=480, fps=15):
-    picam2 = Picamera2()
-    config = picam2.create_video_configuration(main={"size": (width, height)})
-    picam2.configure(config)
-    picam2.start()
-    
+def mjpeg_generator(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
+    init_camera()
     try:
         while True:
-            frame = picam2.capture_array()
-            # Convert to JPEG bytes
+            with camera_lock:
+                frame = camera.capture_array()
             ret, jpeg = cv2.imencode('.jpg', frame)
             if ret:
                 frame_bytes = jpeg.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-    finally:
-        picam2.stop()
+    except GeneratorExit:
+        return
 
 @app.route('/mjpeg')
 def mjpeg_stream():
@@ -55,48 +73,38 @@ def mjpeg_stream():
 
 @app.route('/snapshot')
 def snapshot():
-    picam2 = Picamera2()
-    config = picam2.create_still_configuration(main={"size": (640, 480)})
-    picam2.configure(config)
-    picam2.start()
-    frame = picam2.capture_array()
-    picam2.stop()
+    init_camera()
+    with camera_lock:
+        frame = camera.capture_array()
     _, jpeg = cv2.imencode('.jpg', frame)
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
 class CameraTrack(VideoStreamTrack):
-    def __init__(self, width=640, height=480, fps=15):
+    def __init__(self, width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
         super().__init__()
-        self.picam2 = None
         self.width = width
         self.height = height
         self.fps = fps
         self.camera_available = False
-        
-        # Try to initialize camera with picamera2
+
         try:
-            self.picam2 = Picamera2()
-            config = self.picam2.create_video_configuration(main={"size": (width, height)})
-            self.picam2.configure(config)
-            self.picam2.start()
-            # Test capture
-            _ = self.picam2.capture_array()
+            init_camera()
             self.camera_available = True
-            print("✓ Camera initialized via picamera2")
+            print("✓ Camera initialized for WebRTC via shared Picamera2")
         except Exception as e:
             print(f"⚠ picamera2 error: {e}")
             self.camera_available = False
-        
+
         if not self.camera_available:
-            print("⚠ Camera not available - will stream black frames as fallback")
             print("⚠ Camera not available - will stream black frames as fallback")
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
         
-        if self.camera_available and self.picam2:
+        if self.camera_available:
             try:
-                frame = self.picam2.capture_array()
+                with camera_lock:
+                    frame = camera.capture_array()
                 frame = cv2.flip(frame, 0)  # vertically flip if needed
             except Exception as e:
                 print(f"⚠ Camera read error: {e}")
@@ -122,11 +130,8 @@ class CameraTrack(VideoStreamTrack):
 
     def stop(self):
         super().stop()
-        try:
-            if self.picam2:
-                self.picam2.stop()
-        except Exception as e:
-            print(f"⚠ Error closing camera: {e}")
+        # Shared camera is closed at process shutdown, not per-track
+        pass
 
 @app.route('/offer', methods=['POST'])
 def offer():
