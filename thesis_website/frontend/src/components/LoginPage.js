@@ -41,7 +41,7 @@ function LoginPage({ onLogin, onSwitchToSignup, onBack }) {
 
     try {
       // DYNAMIC IP FIX: Use window.location.hostname to find the Pi automatically
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5000/api/auth/login`;
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/auth/login`;
 
       const response = await fetch(apiUrl, {
         method: 'POST',

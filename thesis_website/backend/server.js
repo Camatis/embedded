@@ -96,7 +96,9 @@ function startHardwareProcess() {
 
   try {
     console.log('Starting hardware controller process...');
-    hardwareProcess = spawn('python', [path.join(__dirname, '..', '..', 'servotest.py')], {
+    const pythonCmd = process.env.PYTHON_CMD || 'python3';
+    console.log('Using Python command:', pythonCmd);
+    hardwareProcess = spawn(pythonCmd, [path.join(__dirname, '..', '..', 'hardware_controller.py')], {
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -246,6 +248,10 @@ const User = mongoose.model('User', userSchema);
 // Session Schema for Sorting Data
 const SessionSchema = new mongoose.Schema({
   session_name: String,
+  userId: {
+    type: String,
+    required: true
+  },
   counts: {
     small: { type: Number, default: 0 },
     medium: { type: Number, default: 0 },
@@ -435,6 +441,36 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+const normalizeSessionUserId = (userId) => {
+  if (!userId) return null;
+  return typeof userId === 'string' ? userId : userId.toString();
+};
+
+const sessionAccessibleByUser = (session, userId, userRole) => {
+  if (userRole === 'admin') return true;
+  if (!session?.userId) return false;
+  return normalizeSessionUserId(session.userId) === normalizeSessionUserId(userId);
+};
+
+const getRequestUserContext = async (req) => {
+  let userRole = 'user';
+  let userId = req.userId;
+
+  if (req.userId === 'master-admin') {
+    userRole = 'admin';
+  } else if (typeof req.userId === 'string' && req.userId.startsWith('offline-')) {
+    userRole = 'user';
+  } else {
+    const user = await User.findById(req.userId);
+    if (user) {
+      userRole = user.role || 'user';
+      userId = user._id.toString();
+    }
+  }
+
+  return { userId: normalizeSessionUserId(userId), userRole };
+};
+
 // Protected route - Get current user
 app.get('/api/auth/me', verifyToken, async (req, res) => {
   try {
@@ -461,7 +497,7 @@ app.get('/api/auth/me', verifyToken, async (req, res) => {
 // ===== SESSION/SORTING ENDPOINTS =====
 
 // GET: Fetch all sessions
-app.get('/api/sessions', async (req, res) => {
+app.get('/api/sessions', verifyToken, async (req, res) => {
   const loadLocalSessions = () => {
     const files = fs.existsSync(UNSYNCED_BATCH_DIR)
       ? fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'))
@@ -478,9 +514,13 @@ app.get('/api/sessions', async (req, res) => {
   };
 
   try {
-    const sessions = await Session.find().sort({ 'timestamps.start_time': -1 });
-    const local = loadLocalSessions();
-    const queued = offlineQueue.map(q => ({ ...q }));
+    const { userId, userRole } = await getRequestUserContext(req);
+    const query = userRole === 'admin' ? {} : { userId };
+
+    const sessions = await Session.find(query).sort({ 'timestamps.start_time': -1 });
+    const local = loadLocalSessions().filter(session => sessionAccessibleByUser(session, userId, userRole));
+    const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole));
+
     const merged = [...local, ...queued, ...sessions];
     merged.sort((a, b) => {
       const aTime = new Date(a.timestamps?.start_time || 0).getTime();
@@ -490,13 +530,15 @@ app.get('/api/sessions', async (req, res) => {
     return res.json(merged);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
-    return res.json(loadLocalSessions());
+    const { userId, userRole } = await getRequestUserContext(req);
+    return res.json(loadLocalSessions().filter(session => sessionAccessibleByUser(session, userId, userRole)));
   }
 });
 
 // POST: Create a new session
-app.post('/api/sessions', async (req, res) => {
-  const payload = { ...req.body };
+app.post('/api/sessions', verifyToken, async (req, res) => {
+  const { userId } = await getRequestUserContext(req);
+  const payload = { ...req.body, userId };
   if (!payload._id) {
     payload._id = `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
@@ -518,12 +560,18 @@ app.post('/api/sessions', async (req, res) => {
 });
 
 // GET: Fetch a specific session by ID
-app.get('/api/sessions/:id', async (req, res) => {
+app.get('/api/sessions/:id', verifyToken, async (req, res) => {
   try {
     const session = await Session.findById(req.params.id);
     if (!session) {
       return res.status(404).json({ message: 'Session not found' });
     }
+
+    const { userId, userRole } = await getRequestUserContext(req);
+    if (!sessionAccessibleByUser(session, userId, userRole)) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     res.json(session);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -531,7 +579,7 @@ app.get('/api/sessions/:id', async (req, res) => {
 });
 
 // PUT: Update a session (rename or update counts)
-app.put('/api/sessions/:id', async (req, res) => {
+app.put('/api/sessions/:id', verifyToken, async (req, res) => {
   const sessionId = req.params.id;
   let updateData = {};
 
@@ -563,6 +611,12 @@ app.put('/api/sessions/:id', async (req, res) => {
       updateData.session_name = req.body.session_name;
     }
 
+    const { userId, userRole } = await getRequestUserContext(req);
+    const existingSession = await Session.findById(sessionId);
+    if (existingSession && !sessionAccessibleByUser(existingSession, userId, userRole)) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     // If no changes are being sent, don't perform update.
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ message: 'No update fields provided' });
@@ -584,6 +638,9 @@ app.put('/api/sessions/:id', async (req, res) => {
     const queueIndex = offlineQueue.findIndex(q => q._id === sessionId);
     if (queueIndex !== -1) {
       const queueSession = offlineQueue[queueIndex];
+      if (!sessionAccessibleByUser(queueSession, userId, userRole)) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
       const merged = {
         ...queueSession,
         ...updateData,
@@ -613,6 +670,9 @@ app.put('/api/sessions/:id', async (req, res) => {
         const raw = fs.readFileSync(filePath, 'utf8');
         const batch = JSON.parse(raw);
         if (batch._id === sessionId) {
+          if (!sessionAccessibleByUser(batch, userId, userRole)) {
+            return res.status(403).json({ message: 'Access denied' });
+          }
           // merge stale data and update
           const merged = {
             ...batch,
@@ -649,8 +709,18 @@ app.put('/api/sessions/:id', async (req, res) => {
 });
 
 // DELETE: Delete a session
-app.delete('/api/sessions/:id', async (req, res) => {
+app.delete('/api/sessions/:id', verifyToken, async (req, res) => {
   try {
+    const session = await Session.findById(req.params.id);
+    if (!session) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    const { userId, userRole } = await getRequestUserContext(req);
+    if (!sessionAccessibleByUser(session, userId, userRole)) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     await Session.findByIdAndDelete(req.params.id);
     res.json({ message: 'Session deleted' });
   } catch (err) {
@@ -659,31 +729,42 @@ app.delete('/api/sessions/:id', async (req, res) => {
 });
 
 // DELETE: Clear all sessions (server + local offline queue)
-app.delete('/api/sessions', async (req, res) => {
+app.delete('/api/sessions', verifyToken, async (req, res) => {
   let deletedCount = 0;
   let localCleared = false;
 
   try {
-    const result = await Session.deleteMany({});
+    const { userId, userRole } = await getRequestUserContext(req);
+    const query = userRole === 'admin' ? {} : { userId };
+    const result = await Session.deleteMany(query);
     deletedCount = result.deletedCount || 0;
-  } catch (err) {
-    console.warn('Failed to delete from MongoDB sessions, continuing to clear local queue:', err.message || err);
-  }
 
-  try {
+    // Also clear queued and local sessions belonging to this user
     if (fs.existsSync(UNSYNCED_BATCH_DIR)) {
       const files = fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'));
       for (const file of files) {
-        fs.unlinkSync(path.join(UNSYNCED_BATCH_DIR, file));
+        const filePath = path.join(UNSYNCED_BATCH_DIR, file);
+        try {
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const batch = JSON.parse(raw);
+          if (sessionAccessibleByUser(batch, userId, userRole)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (err) {
+          console.warn('Skipping local session file due to read error:', file, err.message || err);
+        }
       }
       localCleared = true;
     }
+
+    const retained = offlineQueue.filter(session => !sessionAccessibleByUser(session, userId, userRole));
+    offlineQueue.splice(0, offlineQueue.length, ...retained);
   } catch (err) {
-    console.warn('Failed to delete local unsynced batch files:', err.message || err);
+    console.warn('Failed to delete sessions:', err.message || err);
   }
 
   res.json({
-    message: 'All sessions deletion request processed',
+    message: 'Session deletion request processed',
     serverDeleted: deletedCount,
     localCleared,
   });
@@ -937,7 +1018,7 @@ app.post('/api/dev/clear-users', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 // Server startup (HTTPS if certs exist, otherwise HTTP)
 function startServer() {

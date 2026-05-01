@@ -14,7 +14,7 @@ function App() {
   useEffect(() => {
     const verifyToken = async () => {
       try {
-        const response = await fetch('http://localhost:5000/api/auth/me', {
+        const response = await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/auth/me`, {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -74,7 +74,7 @@ function App() {
   }
 
   if (user && token) {
-    return <Dashboard user={user} onLogout={handleLogout} />;
+    return <Dashboard user={user} token={token} onLogout={handleLogout} />;
   }
 
   if (currentPage === 'landing') {

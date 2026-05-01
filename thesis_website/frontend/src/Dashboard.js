@@ -30,7 +30,6 @@ function Dashboard({ user, token, onLogout }) {
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [editingName, setEditingName] = useState('');
   const videoRef = useRef(null);
-  const [cameraError, setCameraError] = useState(null);
   const [cameraReloadKey, setCameraReloadKey] = useState(0);
   const pcRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1022,7 +1021,7 @@ function Dashboard({ user, token, onLogout }) {
               {user && user.username ? user.username : 'User'}
             </div>
             <nav className="menu-items" aria-label="Main navigation">
-              <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setCameraError(null); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
+              <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
               <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
               <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
               <button type="button" onClick={() => { setCurrentView('hardware-controls'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-controls' ? 'active' : ''}`}>Hardware Controls</button>
@@ -1057,8 +1056,7 @@ function Dashboard({ user, token, onLogout }) {
               </div>
               <div className="camera-container">
                 <img
-                  key={cameraReloadKey}
-                  src={`${window.location.protocol}//${window.location.hostname}:8081/mjpeg?t=${cameraReloadKey}`}
+                  src={`${window.location.protocol}//${window.location.hostname}:8081/mjpeg`}
                   alt="MJPEG camera stream"
                   style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px' }}
                   onError={() => setCameraError('MJPEG stream unavailable. Is cam_stream.py running?')}

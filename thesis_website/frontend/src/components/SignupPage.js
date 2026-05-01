@@ -26,13 +26,21 @@ function SignupPage({ onSignup, onSwitchToLogin, onBack }) {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:5000/api/auth/signup', {
+      // DYNAMIC IP FIX: Use window.location.hostname to find the backend automatically
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/auth/signup`;
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ username, password }),
       });
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new TypeError("Server did not return JSON. Is the Node.js backend running?");
+      }
 
       const data = await response.json();
 
@@ -42,7 +50,7 @@ function SignupPage({ onSignup, onSwitchToLogin, onBack }) {
         setError(data.message || 'Signup failed');
       }
     } catch (err) {
-      setError('An error occurred. Please try again.');
+      setError(err.message || 'An error occurred. Please try again.');
       console.error('Signup error:', err);
     } finally {
       setLoading(false);

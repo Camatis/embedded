@@ -3,5 +3,10 @@
     "password": "$2b$10$BEKdhn6qQVuheUG6l2fR6.H.1Xgi7evgKiaTgB8Mzu8vFe9fl73Hq",
     "role": "admin",
     "updatedAt": "2026-03-20T18:10:36.108Z"
+  },
+  "testuser": {
+    "password": "$2b$10$OQ..bJDkpq9v.V2G3ZPY8.Aw0efWexu/6cmaGziENuDLwrbq6i7aS",
+    "role": "user",
+    "updatedAt": "2026-04-30T12:13:21.650Z"
   }
 }
