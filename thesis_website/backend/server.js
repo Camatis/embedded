@@ -12,7 +12,7 @@ require('dotenv').config();
 
 const app = express();
 
-// Offline-first constants
+// Online-first constants
 const LOCAL_DATA_DIR = process.env.LOCAL_DATA_DIR || path.join(__dirname, '..', 'local_data');
 const USER_SHADOW_FILE = path.join(LOCAL_DATA_DIR, 'users_shadow.json');
 const UNSYNCED_BATCH_DIR = path.join(LOCAL_DATA_DIR, 'unsynced_batches');
@@ -91,6 +91,11 @@ function writeHardwareControlFile(running) {
 async function waitForHardwareReady() {
   const deadline = Date.now() + HARDWARE_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (hardwareProcess && hardwareProcess.exitCode !== null) {
+      console.error(`Hardware process exited early with code ${hardwareProcess.exitCode}`);
+      return false;
+    }
+
     try {
       const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`, {
         timeout: HARDWARE_READY_INTERVAL_MS
@@ -133,6 +138,10 @@ async function startHardwareProcess() {
       console.log(`Hardware process spawned with PID ${hardwareProcess.pid}`);
     });
 
+    hardwareProcess.on('error', (err) => {
+      console.error('Hardware process error event:', err);
+    });
+
     hardwareProcess.stdout.on('data', (data) => {
       console.log(`[Hardware] ${data.toString().trim()}`);
     });
@@ -149,13 +158,16 @@ async function startHardwareProcess() {
 
     const ready = await waitForHardwareReady();
     if (!ready) {
-      const message = `Hardware did not become ready within ${HARDWARE_READY_TIMEOUT_MS}ms`;
-      console.error(message);
-      if (hardwareProcess) {
-        hardwareProcess.kill('SIGTERM');
+      const message = `Hardware process started but not ready within ${HARDWARE_READY_TIMEOUT_MS}ms. It may still be warming up.`;
+      console.warn(message);
+      if (hardwareProcess && hardwareProcess.exitCode !== null) {
+        console.error(`Hardware process exited with code ${hardwareProcess.exitCode}`);
         hardwareProcess = null;
+        return { success: false, message: `Hardware failed to start: exited with code ${hardwareProcess.exitCode}` };
       }
-      return { success: false, message };
+      writeHardwareControlFile(true);
+      hardwareRunning = true;
+      return { success: true, starting: true, message };
     }
 
     writeHardwareControlFile(true);
@@ -194,36 +206,29 @@ function stopHardwareProcess() {
   }
 }
 
-function flushOfflineQueue() {
-  if (offlineQueue.length === 0) return;
-  const queued = offlineQueue.splice(0, offlineQueue.length);
+function saveOfflineBatch(batch) {
+  const localId = batch._id || `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const sessionToSave = { ...batch, _id: localId };
+  const safeId = localId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const name = `offline_${safeId}_${Date.now()}.json`;
+  const filePath = path.join(UNSYNCED_BATCH_DIR, name);
 
-  for (const batch of queued) {
-    try {
-      const name = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.json`;
-      const filePath = path.join(UNSYNCED_BATCH_DIR, name);
-      fs.writeFileSync(filePath, JSON.stringify(batch, null, 2), 'utf8');
-    } catch (err) {
-      console.error('Error writing offline batch file', err);
-      // if failure, push back for retry
-      offlineQueue.unshift(batch);
+  try {
+    if (!fs.existsSync(UNSYNCED_BATCH_DIR)) {
+      fs.mkdirSync(UNSYNCED_BATCH_DIR, { recursive: true });
     }
+    fs.writeFileSync(filePath, JSON.stringify(sessionToSave, null, 2), 'utf8');
+    console.log(`Offline batch saved: ${filePath}`);
+  } catch (err) {
+    console.error('Error writing offline batch file:', err);
   }
-}
 
-function scheduleOfflineFlush() {
-  if (enqueueFlushHandle) return;
-  enqueueFlushHandle = setTimeout(() => {
-    enqueueFlushHandle = null;
-    flushOfflineQueue();
-  }, 150);
+  return sessionToSave;
 }
 
 async function enqueueBatch(batch) {
-  const localId = batch._id || `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const sessionToSave = { ...batch, _id: localId };
+  const sessionToSave = saveOfflineBatch(batch);
   offlineQueue.push(sessionToSave);
-  scheduleOfflineFlush();
   return sessionToSave;
 }
 
@@ -796,7 +801,10 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
 // DELETE: Delete a session
 app.delete('/api/sessions/:id', verifyToken, async (req, res) => {
   try {
-    const session = await Session.findById(req.params.id);
+    let session = null;
+    if (isValidSessionObjectId(req.params.id)) {
+      session = await Session.findById(req.params.id);
+    }
     if (!session) {
       return res.status(404).json({ message: 'Session not found' });
     }
@@ -859,6 +867,7 @@ app.delete('/api/sessions', verifyToken, async (req, res) => {
 // POST: Start hardware controller process
 app.post('/api/hardware/start', async (req, res) => {
   const result = await startHardwareProcess();
+  console.log('Hardware start result:', result);
   const status = result.success ? 200 : 500;
   res.status(status).json(result);
 });
@@ -881,8 +890,8 @@ app.get('/api/hardware/status', (req, res) => {
 
 const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost:5000';
 const PYTHON_HARDWARE_SCRIPT = process.env.PYTHON_HARDWARE_SCRIPT || path.resolve(__dirname, '..', '..', 'servotest.py');
-const HARDWARE_READY_TIMEOUT_MS = Number(process.env.HARDWARE_READY_TIMEOUT_MS) || 5000;
-const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS) || 250;
+const HARDWARE_READY_TIMEOUT_MS = Number(process.env.HARDWARE_READY_TIMEOUT_MS) || 60000;
+const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS) || 500;
 
 // New endpoint to control gates
 app.post('/api/hardware/gate', async (req, res) => {
@@ -902,7 +911,7 @@ app.get('/api/hardware/gate', async (req, res) => {
         const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/gate`);
         res.json(response.data);
     } catch (error) {
-        console.error('Error fetching gate status:', error.message);
+        console.error('Error fetching gate status:', error?.message || error);
         res.json({ success: false, message: 'Hardware server not available', gate_states: {} });
     }
 });
@@ -950,7 +959,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
             counts: data.counts || {}
         });
     } catch (error) {
-        console.error('Error getting sensor data:', error.message);
+        console.error('Error getting sensor data:', error?.message || error);
         res.json({ trigger: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true, state: 'offline', counts: {} });
     }
 });
