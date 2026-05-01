@@ -800,7 +800,7 @@ const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost
 app.post('/api/hardware/gate', async (req, res) => {
     const { gate, action } = req.body;
     try {
-        await axios.post(`${PYTHON_API_BASE_URL}/gate`, { gate, action });
+        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/gate`, { gate, action });
         res.json({ success: true, message: `Gate ${gate} ${action} command sent` });
     } catch (error) {
         console.error('Error controlling gate:', error.message);
@@ -808,11 +808,23 @@ app.post('/api/hardware/gate', async (req, res) => {
     }
 });
 
+// GET: Get current gate status
+app.get('/api/hardware/gate', async (req, res) => {
+    try {
+        const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/gate`);
+        res.json(response.data);
+    } catch (error) {
+        console.error('Error fetching gate status:', error.message);
+        res.json({ success: false, message: 'Hardware server not available', gate_states: {} });
+    }
+});
+
 // New endpoint to control conveyor
 app.post('/api/hardware/conveyor', async (req, res) => {
     const { action } = req.body;
     try {
-        await axios.post(`${PYTHON_API_BASE_URL}/conveyor`, { action });
+        const mappedAction = action === 'continue' ? 'resume' : action;
+        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction });
         res.json({ success: true, message: `Conveyor ${action} command sent` });
     } catch (error) {
         console.error('Error controlling conveyor:', error.message);
@@ -824,7 +836,8 @@ app.post('/api/hardware/conveyor', async (req, res) => {
 app.post('/api/hardware/control', async (req, res) => {
     const { action } = req.body;
     try {
-        await axios.post(`${PYTHON_API_BASE_URL}/control`, { action });
+        const mappedAction = action === 'continue' ? 'resume' : action;
+        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction });
         res.json({ success: true, message: `Sorting ${action} command sent` });
     } catch (error) {
         console.error('Error controlling sorting:', error.message);
@@ -835,11 +848,22 @@ app.post('/api/hardware/control', async (req, res) => {
 // New endpoint to get sensor status
 app.get('/api/hardware/sensors', async (req, res) => {
     try {
-        const response = await axios.get(`${PYTHON_API_BASE_URL}/sensors`);
-        res.json(response.data);
+        const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`);
+        const data = response.data || {};
+        res.json({
+            trigger: data.sensors?.trigger ?? false,
+            medium: data.sensors?.medium ?? false,
+            large: data.sensors?.large ?? false,
+            defective: data.last_mango?.health === 'DEFECTIVE',
+            detectedSize: data.last_mango?.size ?? null,
+            timestamp: Date.now(),
+            online: true,
+            state: data.state || 'unknown',
+            counts: data.counts || {}
+        });
     } catch (error) {
         console.error('Error getting sensor data:', error.message);
-        res.json({ small: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true });
+        res.json({ trigger: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true, state: 'offline', counts: {} });
     }
 });
 
