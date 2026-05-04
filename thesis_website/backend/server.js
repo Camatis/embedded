@@ -1143,6 +1143,12 @@ const PORT = process.env.PORT || 5001;
 
 // Server startup (HTTPS if certs exist, otherwise HTTP)
 function startServer() {
+  // Force HTTP only (comment out HTTPS section for development)
+  app.listen(PORT, () => {
+    console.log(`✅ HTTP Server running on http://0.0.0.0:${PORT}`);
+  });
+  
+  /* Original HTTPS code (disabled for development):
   const keyPath = '/etc/ssl/private/key.pem';
   const certPath = '/etc/ssl/certs/cert.pem';
 
@@ -1160,6 +1166,7 @@ function startServer() {
       console.log('⚠️  No SSL certificates found; running without HTTPS');
     });
   }
+  */
 }
 
 startServer();
