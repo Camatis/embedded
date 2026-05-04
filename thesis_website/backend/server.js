@@ -268,7 +268,7 @@ app.use(cors());
 app.use(express.json());
 
 // MongoDB Connection
-const uri = "mongodb+srv://admin:123@emtech.tlubq5q.mongodb.net/?appName=EMTECH";
+const uri = process.env.MONGODB_URI || "mongodb+srv://admin:123@emtech.tlubq5q.mongodb.net/?appName=EMTECH";
 mongoose.connect(uri, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
