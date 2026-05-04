@@ -127,11 +127,20 @@ async function startHardwareProcess() {
   try {
     console.log('Starting servotest hardware controller process...');
     const pythonCmd = process.env.PYTHON_CMD || 'python3';
+    const embeddedDir = path.resolve(__dirname, '..', '..');
     console.log('Using Python command:', pythonCmd);
     console.log('Servotest script path:', PYTHON_HARDWARE_SCRIPT);
+    console.log('Working directory:', embeddedDir);
+    
+    // Spawn with explicit cwd (so YOLO model is found) and inherited environment
     hardwareProcess = spawn(pythonCmd, [PYTHON_HARDWARE_SCRIPT], {
       detached: false,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: embeddedDir,
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1'
+      }
     });
 
     hardwareProcess.on('spawn', () => {
