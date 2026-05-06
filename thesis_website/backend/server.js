@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const axios = require('axios');
 require('dotenv').config();
 
@@ -88,6 +88,15 @@ function writeHardwareControlFile(running) {
   }
 }
 
+async function ensureHardwareProcessRunning() {
+  if (hardwareProcess && hardwareProcess.exitCode === null) {
+    return true;
+  }
+
+  const result = await startHardwareProcess();
+  return result.success;
+}
+
 async function waitForHardwareReady() {
   const deadline = Date.now() + HARDWARE_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -104,7 +113,7 @@ async function waitForHardwareReady() {
         return true;
       }
     } catch (err) {
-      // ignore and retry until timeout
+      console.debug('Hardware service not ready yet:', err?.message || err);
     }
     await new Promise(resolve => setTimeout(resolve, HARDWARE_READY_INTERVAL_MS));
   }
@@ -131,6 +140,20 @@ async function startHardwareProcess() {
     console.log('Using Python command:', pythonCmd);
     console.log('Servotest script path:', PYTHON_HARDWARE_SCRIPT);
     console.log('Working directory:', embeddedDir);
+
+    const depCheck = spawnSync(pythonCmd, ['-c', 'import board'], {
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1'
+      }
+    });
+    if (depCheck.error || depCheck.status !== 0) {
+      const depErr = depCheck.error?.message || `exit code ${depCheck.status}`;
+      const message = `Python dependency missing or invalid Python environment for ${pythonCmd}: ${depErr}`;
+      console.error(message);
+      return { success: false, message };
+    }
     
     // Spawn with explicit cwd (so YOLO model is found) and inherited environment
     hardwareProcess = spawn(pythonCmd, [PYTHON_HARDWARE_SCRIPT], {
@@ -897,7 +920,7 @@ app.get('/api/hardware/status', (req, res) => {
   });
 });
 
-const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://localhost:5000';
+const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://127.0.0.1:5000';
 const PYTHON_HARDWARE_SCRIPT = process.env.PYTHON_HARDWARE_SCRIPT || path.resolve(__dirname, '..', '..', 'servotest.py');
 const HARDWARE_READY_TIMEOUT_MS = Number(process.env.HARDWARE_READY_TIMEOUT_MS) || 60000;
 const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS) || 500;
@@ -906,22 +929,24 @@ const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS
 app.post('/api/hardware/gate', async (req, res) => {
     const { gate, action } = req.body;
     try {
+        await ensureHardwareProcessRunning();
         await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/gate`, { gate, action });
         res.json({ success: true, message: `Gate ${gate} ${action} command sent` });
     } catch (error) {
-        console.error('Error controlling gate:', error.message);
-        res.json({ success: false, message: 'Hardware server not available' });
+        console.error('Error controlling gate:', error?.message || error);
+        res.status(500).json({ success: false, message: 'Hardware server not available' });
     }
 });
 
 // GET: Get current gate status
 app.get('/api/hardware/gate', async (req, res) => {
     try {
+        await ensureHardwareProcessRunning();
         const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/gate`);
         res.json(response.data);
     } catch (error) {
         console.error('Error fetching gate status:', error?.message || error);
-        res.json({ success: false, message: 'Hardware server not available', gate_states: {} });
+        res.status(500).json({ success: false, message: 'Hardware server not available', gate_states: {} });
     }
 });
 
@@ -929,12 +954,13 @@ app.get('/api/hardware/gate', async (req, res) => {
 app.post('/api/hardware/conveyor', async (req, res) => {
     const { action } = req.body;
     try {
+        await ensureHardwareProcessRunning();
         const mappedAction = action === 'continue' ? 'resume' : action;
         await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction });
         res.json({ success: true, message: `Conveyor ${action} command sent` });
     } catch (error) {
-        console.error('Error controlling conveyor:', error.message);
-        res.json({ success: false, message: 'Hardware server not available' });
+        console.error('Error controlling conveyor:', error?.message || error);
+        res.status(500).json({ success: false, message: 'Hardware server not available' });
     }
 });
 
@@ -942,18 +968,20 @@ app.post('/api/hardware/conveyor', async (req, res) => {
 app.post('/api/hardware/control', async (req, res) => {
     const { action } = req.body;
     try {
+        await ensureHardwareProcessRunning();
         const mappedAction = action === 'continue' ? 'resume' : action;
         await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction });
         res.json({ success: true, message: `Sorting ${action} command sent` });
     } catch (error) {
-        console.error('Error controlling sorting:', error.message);
-        res.json({ success: false, message: 'Hardware server not available' });
+        console.error('Error controlling sorting:', error?.message || error);
+        res.status(500).json({ success: false, message: 'Hardware server not available' });
     }
 });
 
 // New endpoint to get sensor status
 app.get('/api/hardware/sensors', async (req, res) => {
     try {
+        await ensureHardwareProcessRunning();
         const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`);
         const data = response.data || {};
         res.json({
@@ -969,7 +997,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
         });
     } catch (error) {
         console.error('Error getting sensor data:', error?.message || error);
-        res.json({ trigger: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true, state: 'offline', counts: {} });
+        res.status(500).json({ trigger: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true, state: 'offline', counts: {} });
     }
 });
 
@@ -1103,32 +1131,35 @@ let conveyorProcess = null;
 app.post('/api/conveyor', async (req, res) => {
   try {
     const action = req.body?.action;
-    await axios.post(`${PYTHON_API_BASE_URL}/control`, { action });
+    await ensureHardwareProcessRunning();
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action });
     res.json({ success: true, message: `Conveyor ${action} command sent` });
   } catch (error) {
-    console.error('Error controlling conveyor:', error.message);
-    res.json({ success: false, message: 'Hardware server not available' });
+    console.error('Error controlling conveyor:', error?.message || error);
+    res.status(500).json({ success: false, message: 'Hardware server not available' });
   }
 });
 
 // New hardware pause/continue controls for direct run-state changes
 app.post('/api/hardware/pause', async (req, res) => {
   try {
-    await axios.post(`${PYTHON_API_BASE_URL}/control`, { action: 'pause' });
+    await ensureHardwareProcessRunning();
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'pause' });
     res.json({ success: true, message: 'Hardware controller paused' });
   } catch (error) {
-    console.error('Error pausing sorting:', error.message);
-    res.json({ success: false, message: 'Hardware server not available' });
+    console.error('Error pausing sorting:', error?.message || error);
+    res.status(500).json({ success: false, message: 'Hardware server not available' });
   }
 });
 
 app.post('/api/hardware/continue', async (req, res) => {
   try {
-    await axios.post(`${PYTHON_API_BASE_URL}/control`, { action: 'continue' });
+    await ensureHardwareProcessRunning();
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'continue' });
     res.json({ success: true, message: 'Hardware controller continued' });
   } catch (error) {
-    console.error('Error continuing sorting:', error.message);
-    res.json({ success: false, message: 'Hardware server not available' });
+    console.error('Error continuing sorting:', error?.message || error);
+    res.status(500).json({ success: false, message: 'Hardware server not available' });
   }
 });
 

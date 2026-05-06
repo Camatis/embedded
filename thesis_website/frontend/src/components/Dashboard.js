@@ -52,7 +52,6 @@ function Dashboard({ user, token, onLogout }) {
   const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
   const [limitAlert, setLimitAlert] = useState('');
   const [showLimitAlert, setShowLimitAlert] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // Gate state tracking
   const [gateStates, setGateStates] = useState({
@@ -91,19 +90,6 @@ function Dashboard({ user, token, onLogout }) {
   const overlayRef = useRef(null);
   const menuToggleRef = useRef(null);
   const [pwCurrent, setPwCurrent] = useState('');
-
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
   const [pwNew, setPwNew] = useState('');
   const [pwConfirm, setPwConfirm] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
@@ -487,23 +473,19 @@ function Dashboard({ user, token, onLogout }) {
     // Fetch session list from backend (used for Batch History)
   const fetchSessions = async () => {
     try {
-      const apiUrl = `${BACKEND_URL}/api/sessions`;
+      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions`;
       const res = await fetch(apiUrl, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
       if (res.ok) {
-        const data = await res.json();
-        console.log('📋 Fetched sessions:', data);
-        setSessions(data);
+        const data = await res.json();        console.log('📋 Fetched sessions:', data);        setSessions(data);
       } else {
         console.error('Failed to fetch sessions');
-        setHardwareAlert('Offline mode: could not load session history from server.');
       }
     } catch (err) {
       console.error('Error fetching sessions', err);
-      setHardwareAlert('Offline mode: could not load session history from server.');
     }
   };
 
@@ -792,7 +774,7 @@ function Dashboard({ user, token, onLogout }) {
       countsRef.current = initialCounts;
       setSessionActive(true);
       setSessionPaused(false);
-      setHardwareAlert(isOnline ? 'Starting new batch (online-first)...' : 'Offline: saving batch locally and starting when available...');
+      setHardwareAlert('Starting new batch (offline-safe)...');
 
       const clearUrl = `${BACKEND_URL}/api/clear-sensor-data`;
       await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
@@ -910,9 +892,7 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert('Batch stopped and finalized');
         setTimeout(() => { fetchSessions(); }, 500);
       } else {
-        const errorText = await res.text();
-        console.error('Failed to end batch', res.status, errorText);
-        setHardwareAlert(`Batch stop failed: ${res.status} ${errorText}`);
+        console.error('Failed to end batch');
       }
     } catch (err) {
       console.error('Error ending batch', err);
