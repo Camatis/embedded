@@ -288,89 +288,97 @@ def autonomous_sorting_loop():
     global sorting_active, sorting_paused, count_small, count_medium, count_large, count_defective, count_total, last_mango
     
     while True:
-        if not sorting_active:
-            time.sleep(0.1)
-            continue
-            
-        if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
-            print("\n🥭 MANGO DETECTED IN CHAMBER!")
-            
-            is_defective = False
-            
-            # 1. Take a picture instantly using the native Pi terminal command
-            print("📸 Snapping photo with Pi Camera...")
-            try:
-                subprocess.run(["rpicam-jpeg", "-o", "current_mango.jpg", "-t", "1", "--nopreview"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            if not sorting_active:
+                time.sleep(0.1)
+                continue
                 
-                # 2. Run the AI Prediction directly on the saved photo
-                print("🧠 AI Analyzing image...")
-                results = model.predict(source="current_mango.jpg", conf=0.5, verbose=False)
+            if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
+                print("\n🥭 MANGO DETECTED IN CHAMBER!")
                 
-                # Check the results. If it finds even one "Defective" bounding box, flag it.
-                for r in results:
-                    for c in r.boxes.cls:
-                        class_name = model.names[int(c)] 
-                        if class_name == "Defective":
-                            is_defective = True
-                            break
-            except Exception as e:
-                print(f"⚠️ Camera error: Could not grab frame. Assuming mango is Good. Details: {e}")
-
-            # 3. Hardware Size Scan
-            print(f"📐 Scanning physical size for {SCAN_DELAY} seconds...")
-            detected_size = "SMALL" 
-            end_time = time.time() + SCAN_DELAY
-            while time.time() < end_time:
-                if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
-                    detected_size = "LARGE"
-                elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
-                    detected_size = "MEDIUM"
-                time.sleep(0.01) 
-
-            # 4. Fire off the stopper thread for every mango
-            threading.Thread(target=operate_stopper).start() 
-            
-            # 5. Routing & Counting Logic
-            count_total += 1
-            
-            if is_defective:
-                print("🎯 DECISION: Mango is DEFECTIVE. Routing to reject bin.")
-                count_defective += 1
-                # NOTE: If you have a specific servo for defective fruit, trigger its thread here!
+                is_defective = False
                 
-            else:
-                print(f"🎯 DECISION: Mango is Good. Classified as {detected_size}.")
-                if detected_size == "SMALL":
-                    count_small += 1
-                    threading.Thread(target=route_small).start()
-                elif detected_size == "MEDIUM":
-                    count_medium += 1
-                    threading.Thread(target=route_medium).start()
-                elif detected_size == "LARGE":
-                    count_large += 1
-                    threading.Thread(target=route_large).start()
-            
-            # Update last mango
-            last_mango = {
-                "size": detected_size,
-                "health": "DEFECTIVE" if is_defective else "GOOD",
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # 6. Live Dashboard Print
-            print("-" * 50)
-            print(f"📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}")
-            print("-" * 50)
-            
-            # 7. Phantom Mango Fix
-            print("⏳ Waiting for the tail-end of the mango to clear the trigger...")
-            while GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
-                time.sleep(0.05) 
-            time.sleep(0.2) # Debounce buffer
-            
-            print("✅ Chamber clear. Ready for the next mango.")
+                # 1. Take a picture instantly using the native Pi terminal command with timeout
+                print("📸 Snapping photo with Pi Camera...")
+                try:
+                    subprocess.run(["rpicam-jpeg", "-o", "current_mango.jpg", "-t", "1", "--nopreview"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                    
+                    # 2. Run the AI Prediction directly on the saved photo
+                    print("🧠 AI Analyzing image...")
+                    results = model.predict(source="current_mango.jpg", conf=0.5, verbose=False)
+                    
+                    # Check the results. If it finds even one "Defective" bounding box, flag it.
+                    for r in results:
+                        for c in r.boxes.cls:
+                            class_name = model.names[int(c)] 
+                            if class_name == "Defective":
+                                is_defective = True
+                                break
+                except subprocess.TimeoutExpired:
+                    print(f"⚠️ Camera timeout: rpicam-jpeg took too long. Assuming mango is Good.")
+                except Exception as e:
+                    print(f"⚠️ Camera error: Could not grab frame. Assuming mango is Good. Details: {e}")
 
-        time.sleep(0.01)
+                # 3. Hardware Size Scan
+                print(f"📐 Scanning physical size for {SCAN_DELAY} seconds...")
+                detected_size = "SMALL" 
+                end_time = time.time() + SCAN_DELAY
+                while time.time() < end_time:
+                    if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
+                        detected_size = "LARGE"
+                    elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
+                        detected_size = "MEDIUM"
+                    time.sleep(0.01) 
+
+                # 4. Fire off the stopper thread for every mango
+                threading.Thread(target=operate_stopper).start() 
+                
+                # 5. Routing & Counting Logic
+                count_total += 1
+                
+                if is_defective:
+                    print("🎯 DECISION: Mango is DEFECTIVE. Routing to reject bin.")
+                    count_defective += 1
+                    # NOTE: If you have a specific servo for defective fruit, trigger its thread here!
+                    
+                else:
+                    print(f"🎯 DECISION: Mango is Good. Classified as {detected_size}.")
+                    if detected_size == "SMALL":
+                        count_small += 1
+                        threading.Thread(target=route_small).start()
+                    elif detected_size == "MEDIUM":
+                        count_medium += 1
+                        threading.Thread(target=route_medium).start()
+                    elif detected_size == "LARGE":
+                        count_large += 1
+                        threading.Thread(target=route_large).start()
+                
+                # Update last mango
+                last_mango = {
+                    "size": detected_size,
+                    "health": "DEFECTIVE" if is_defective else "GOOD",
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                # 6. Live Dashboard Print
+                print("-" * 50)
+                print(f"📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}")
+                print("-" * 50)
+                
+                # 7. Phantom Mango Fix
+                print("⏳ Waiting for the tail-end of the mango to clear the trigger...")
+                while GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
+                    time.sleep(0.05) 
+                time.sleep(0.2) # Debounce buffer
+                
+                print("✅ Chamber clear. Ready for the next mango.")
+
+            time.sleep(0.01)
+        except Exception as e:
+            print(f"❌ ERROR in sorting loop: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(1)  # Prevent spam if error keeps happening
 
 # Start sorting loop in background thread
 sorting_thread = threading.Thread(target=autonomous_sorting_loop)

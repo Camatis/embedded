@@ -608,12 +608,22 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
     const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole));
 
     const merged = [...local, ...queued, ...sessions];
-    merged.sort((a, b) => {
+    const uniqueSessions = new Map();
+    for (const session of merged) {
+      if (!session) continue;
+      const key = session.local_id || session._id || session._id?.toString();
+      if (!key) continue;
+      if (!uniqueSessions.has(key) || (session._id && uniqueSessions.get(key)._id !== session._id)) {
+        uniqueSessions.set(key, session);
+      }
+    }
+    const deduped = Array.from(uniqueSessions.values());
+    deduped.sort((a, b) => {
       const aTime = new Date(a.timestamps?.start_time || 0).getTime();
       const bTime = new Date(b.timestamps?.start_time || 0).getTime();
       return bTime - aTime;
     });
-    return res.json(merged);
+    return res.json(deduped);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
     const { userId, userRole } = await getRequestUserContext(req);
