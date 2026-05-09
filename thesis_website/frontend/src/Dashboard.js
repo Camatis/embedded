@@ -850,6 +850,19 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert('No batch to stop');
         return;
       }
+
+      // Stop the belt immediately first.
+      try {
+        await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'stop' })
+        });
+      } catch (err) {
+        console.error('Error sending hardware stop command:', err);
+      }
+      await controlConveyor('stop');
+
       const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
       const res = await fetch(apiUrl, {
         method: 'PUT',
@@ -873,7 +886,7 @@ function Dashboard({ user, token, onLogout }) {
         })
       });
       if (res.ok) {
-        // Stop the hardware controller program
+        // Stop the hardware controller program after the belt has been stopped.
         try {
           const stopResult = await stopHardware();
           if (!stopResult.success) {
@@ -884,13 +897,13 @@ function Dashboard({ user, token, onLogout }) {
           console.error('Error stopping sorting process:', err);
         }
         
-        await controlConveyor('stop');
         setSessionActive(false);
         setSessionPaused(false);
         setCurrentSessionId(null);
         setHardwareAlert('Batch stopped and finalized');
         setTimeout(() => { fetchSessions(); }, 500);
       } else {
+
         console.error('Failed to end batch');
       }
     } catch (err) {
@@ -906,6 +919,19 @@ function Dashboard({ user, token, onLogout }) {
         setSessionPaused(false);
         return;
       }
+
+      // Stop the belt immediately, before session save, so UI control is responsive.
+      try {
+        await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'pause' })
+        });
+      } catch (err) {
+        console.error('Error pausing sorting process:', err);
+      }
+      await controlConveyor('pause');
+
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions/${currentSessionId}`;
       const res = await fetch(apiUrl, {
         method: 'PUT',
@@ -927,26 +953,14 @@ function Dashboard({ user, token, onLogout }) {
           }
         })
       });
-      if (res.ok) {
-        // Pause the sorting process
-        try {
-          await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'pause' })
-          });
-        } catch (err) {
-          console.error('Error pausing sorting process:', err);
-        }
-
-        await controlConveyor('pause');
-        setSessionActive(false);
-        setSessionPaused(true);
-        setHardwareAlert('Batch paused - you may continue or stop batch');
-        setTimeout(() => { fetchSessions(); }, 500);
-      } else {
+      if (!res.ok) {
         console.error('Failed to pause session');
       }
+
+      setSessionActive(false);
+      setSessionPaused(true);
+      setHardwareAlert('Batch paused - you may continue or stop batch');
+      setTimeout(() => { fetchSessions(); }, 500);
     } catch (err) {
       console.error('Error pausing session', err);
     }
