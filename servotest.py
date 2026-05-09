@@ -109,14 +109,10 @@ gate_states = {
 # ==========================================
 # 4. BACKGROUND THREAD FUNCTIONS
 # ==========================================
-print("Starting Conveyor Belt (RIGHT / FORWARD at 75% Speed)...")
+# Conveyor belt will be controlled via API commands, not auto-started
 GPIO.output(R_EN, GPIO.HIGH)
 GPIO.output(L_EN, GPIO.HIGH)
 GPIO.output(LPWM, GPIO.LOW) 
-
-conveyor_pwm.ChangeDutyCycle(100) 
-time.sleep(0.2)                   
-conveyor_pwm.ChangeDutyCycle(75)  
 
 hopper_active = True 
 

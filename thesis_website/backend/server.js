@@ -240,7 +240,7 @@ function stopHardwareProcess() {
 
 function saveOfflineBatch(batch) {
   const localId = batch._id || `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const sessionToSave = { ...batch, _id: localId, local_id: localId };
+  const sessionToSave = { ...batch, _id: localId };
   const safeId = localId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const name = `offline_${safeId}_${Date.now()}.json`;
   const filePath = path.join(UNSYNCED_BATCH_DIR, name);
@@ -278,20 +278,12 @@ async function syncUnsyncedBatches() {
     try {
       const raw = fs.readFileSync(filePath, 'utf8');
       const batch = JSON.parse(raw);
-      // Offline batch stored with custom string _id; retain it as local_id before saving to Mongo
+      // Offline batch stored with custom string _id; remove before saving to Mongo
       const payload = { ...batch };
-      const localId = payload._id;
       delete payload._id;
-      payload.local_id = localId;
       const session = new Session(payload);
       await session.save();
       fs.unlinkSync(filePath);
-
-      const queueIndex = offlineQueue.findIndex(q => q._id === localId);
-      if (queueIndex !== -1) {
-        offlineQueue.splice(queueIndex, 1);
-      }
-
       console.log(`Synced offline batch ${file} to Mongo with new ObjectId ${session._id}`);
     } catch (err) {
       console.error('Failed to sync batch', file, err);
@@ -345,11 +337,6 @@ const SessionSchema = new mongoose.Schema({
   userId: {
     type: String,
     required: true
-  },
-  local_id: {
-    type: String,
-    index: true,
-    sparse: true
   },
   counts: {
     small: { type: Number, default: 0 },
@@ -621,22 +608,12 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
     const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole));
 
     const merged = [...local, ...queued, ...sessions];
-    const uniqueSessions = new Map();
-    for (const session of merged) {
-      if (!session) continue;
-      const key = session.local_id || session._id || session._id?.toString();
-      if (!key) continue;
-      if (!uniqueSessions.has(key) || (session._id && uniqueSessions.get(key)._id !== session._id)) {
-        uniqueSessions.set(key, session);
-      }
-    }
-    const deduped = Array.from(uniqueSessions.values());
-    deduped.sort((a, b) => {
+    merged.sort((a, b) => {
       const aTime = new Date(a.timestamps?.start_time || 0).getTime();
       const bTime = new Date(b.timestamps?.start_time || 0).getTime();
       return bTime - aTime;
     });
-    return res.json(deduped);
+    return res.json(merged);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
     const { userId, userRole } = await getRequestUserContext(req);
@@ -676,8 +653,6 @@ app.get('/api/sessions/:id', verifyToken, async (req, res) => {
     let session = null;
     if (isValidSessionObjectId(req.params.id)) {
       session = await Session.findById(req.params.id);
-    } else {
-      session = await Session.findOne({ local_id: req.params.id });
     }
 
     if (!session) {
@@ -757,8 +732,6 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
     let existingSession = null;
     if (isValidSessionObjectId(sessionId)) {
       existingSession = await Session.findById(sessionId);
-    } else {
-      existingSession = await Session.findOne({ local_id: sessionId });
     }
     if (existingSession && !sessionAccessibleByUser(existingSession, userId, userRole)) {
       return res.status(403).json({ message: 'Access denied' });
@@ -773,8 +746,6 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
     try {
       if (isValidSessionObjectId(sessionId)) {
         updatedSession = await Session.findByIdAndUpdate(sessionId, updateData, { new: true });
-      } else {
-        updatedSession = await Session.findOneAndUpdate({ local_id: sessionId }, updateData, { new: true });
       }
     } catch (err) {
       console.warn('Cloud update failed for session:', err.message || err);
