@@ -41,8 +41,36 @@ GPIO.setup(LPWM, GPIO.OUT)
 GPIO.setup(R_EN, GPIO.OUT)
 GPIO.setup(L_EN, GPIO.OUT)
 
-conveyor_pwm = GPIO.PWM(RPWM, 100) 
-conveyor_pwm.start(0) 
+conveyor_pwm = GPIO.PWM(RPWM, 100)
+conveyor_pwm.start(0)
+
+# Smooth speed control for the belt motor
+CONVEYOR_SPEED = 75
+CONVEYOR_RAMP_STEP = 5
+CONVEYOR_RAMP_DELAY = 0.05
+current_conveyor_speed = 0
+conveyor_lock = threading.Lock()
+
+def set_conveyor_speed(target_speed):
+    """Ramp the conveyor speed up or down to avoid sudden speed changes."""
+    global current_conveyor_speed
+    target_speed = max(0, min(100, target_speed))
+
+    with conveyor_lock:
+        if target_speed == current_conveyor_speed:
+            return
+
+        step = CONVEYOR_RAMP_STEP if target_speed > current_conveyor_speed else -CONVEYOR_RAMP_STEP
+        for speed in range(current_conveyor_speed + step, target_speed + step, step):
+            conveyor_pwm.ChangeDutyCycle(speed)
+            current_conveyor_speed = speed
+            time.sleep(CONVEYOR_RAMP_DELAY)
+
+        conveyor_pwm.ChangeDutyCycle(target_speed)
+        current_conveyor_speed = target_speed
+        if target_speed == 0:
+            # Let the belt settle cleanly before accepting the next batch
+            time.sleep(0.12)
 
 # --- Servo Setup (Gates) ---
 i2c = busio.I2C(board.SCL, board.SDA)
@@ -162,22 +190,22 @@ def hardware_control():
     if action == 'start':
         sorting_active = True
         sorting_paused = False
-        conveyor_pwm.ChangeDutyCycle(75)
+        set_conveyor_speed(CONVEYOR_SPEED)
         return jsonify({'success': True, 'message': 'Sorting started'})
     elif action == 'pause':
         sorting_active = False
         sorting_paused = True
-        conveyor_pwm.ChangeDutyCycle(0)
+        set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting paused'})
     elif action == 'resume':
         sorting_active = True
         sorting_paused = False
-        conveyor_pwm.ChangeDutyCycle(75)
+        set_conveyor_speed(CONVEYOR_SPEED)
         return jsonify({'success': True, 'message': 'Sorting resumed'})
     elif action == 'stop':
         sorting_active = False
         sorting_paused = False
-        conveyor_pwm.ChangeDutyCycle(0)
+        set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting stopped'})
     
     return jsonify({'success': False, 'message': 'Invalid action'})
