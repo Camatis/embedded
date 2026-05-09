@@ -166,6 +166,7 @@ def hardware_control():
     if action == 'start':
         sorting_active = True
         sorting_paused = False
+        conveyor_pwm.ChangeDutyCycle(75)
         return jsonify({'success': True, 'message': 'Sorting started'})
     elif action == 'pause':
         sorting_active = False
