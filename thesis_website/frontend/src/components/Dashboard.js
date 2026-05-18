@@ -941,6 +941,32 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert('No batch to stop');
         return;
       }
+
+      setHardwareAlert('Stopping batch...');
+      const currentCounts = {
+        small: countsRef.current.small,
+        medium: countsRef.current.medium,
+        large: countsRef.current.large,
+        defective: countsRef.current.defective,
+        total: countsRef.current.total
+      };
+
+      // Stop hardware and conveyor first so the UI can return to idle quickly.
+      const stopResult = await stopHardware();
+      const conveyorResult = await controlConveyor('stop');
+
+      if (!stopResult.success) {
+        console.error('Hardware stop failed:', stopResult);
+        setHardwareAlert(`Hardware stop failed: ${stopResult.message}`);
+      }
+      if (!conveyorResult.success) {
+        console.error('Conveyor stop failed:', conveyorResult);
+      }
+
+      setSessionActive(false);
+      setSessionPaused(false);
+      setCurrentSessionId(null);
+
       const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
       const res = await fetch(apiUrl, {
         method: 'PUT',
@@ -950,42 +976,31 @@ function Dashboard({ user, token, onLogout }) {
         },
         body: JSON.stringify({
           counts: {
-            small: countsRef.current.small,
-            medium: countsRef.current.medium,
-            large: countsRef.current.large,
-            defective: countsRef.current.defective
+            small: currentCounts.small,
+            medium: currentCounts.medium,
+            large: currentCounts.large,
+            defective: currentCounts.defective
           },
           quality_stats: {
-            non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
-            defective: countsRef.current.defective,
-            total: countsRef.current.total
+            non_defective: currentCounts.small + currentCounts.medium + currentCounts.large,
+            defective: currentCounts.defective,
+            total: currentCounts.total
           },
           timestamps: { end_time: new Date() }
         })
       });
+
       if (res.ok) {
-        // Stop the hardware controller program
-        try {
-          const stopResult = await stopHardware();
-          if (!stopResult.success) {
-            console.error('Hardware stop failed:', stopResult);
-            setHardwareAlert(`Hardware stop failed: ${stopResult.message}`);
-          }
-        } catch (err) {
-          console.error('Error stopping sorting process:', err);
-        }
-        
-        await controlConveyor('stop');
-        setSessionActive(false);
-        setSessionPaused(false);
-        setCurrentSessionId(null);
         setHardwareAlert('Batch stopped and finalized');
-        setTimeout(() => { fetchSessions(); }, 500);
       } else {
-        console.error('Failed to end batch');
+        console.error('Failed to save final batch counts');
+        setHardwareAlert('Batch stopped, but failed to save final batch counts');
       }
+
+      setTimeout(() => { fetchSessions(); }, 500);
     } catch (err) {
       console.error('Error ending batch', err);
+      setHardwareAlert('Error stopping batch');
     }
   };
 

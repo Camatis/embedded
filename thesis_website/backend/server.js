@@ -284,7 +284,11 @@ async function syncUnsyncedBatches() {
       const session = new Session(payload);
       await session.save();
       fs.unlinkSync(filePath);
+      const beforeCount = offlineQueue.length;
+      offlineQueue = offlineQueue.filter(q => q._id !== batch._id);
+      const afterCount = offlineQueue.length;
       console.log(`Synced offline batch ${file} to Mongo with new ObjectId ${session._id}`);
+      console.log(`Offline queue cleanup: removed ${beforeCount - afterCount} entry(ies), ${afterCount} remaining.`);
     } catch (err) {
       console.error('Failed to sync batch', file, err);
     }
@@ -608,12 +612,21 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
     const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole));
 
     const merged = [...local, ...queued, ...sessions];
-    merged.sort((a, b) => {
+    const deduped = [];
+    const seenIds = new Set();
+    for (const session of merged) {
+      const sessionId = String(session._id || session.id || '');
+      if (!sessionId || seenIds.has(sessionId)) continue;
+      seenIds.add(sessionId);
+      deduped.push(session);
+    }
+
+    deduped.sort((a, b) => {
       const aTime = new Date(a.timestamps?.start_time || 0).getTime();
       const bTime = new Date(b.timestamps?.start_time || 0).getTime();
       return bTime - aTime;
     });
-    return res.json(merged);
+    return res.json(deduped);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
     const { userId, userRole } = await getRequestUserContext(req);
