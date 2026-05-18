@@ -272,6 +272,17 @@ function Dashboard({ user, token, onLogout }) {
   //process sensor data and update stats
   const handleSensorData = (data) => {
     try {
+      // Debug logging for received sensor data
+      if (data.detectedSize || data.defective) {
+        console.log('📡 [SENSOR DATA] Received:', { 
+          sessionActive, 
+          sessionPaused, 
+          detectedSize: data.detectedSize, 
+          defective: data.defective,
+          timestamp: new Date().toISOString()
+        });
+      }
+
       //update sensor states
       setSensorStates(prev => ({
         small: { ...prev.small, detecting: data.small },
@@ -281,6 +292,9 @@ function Dashboard({ user, token, onLogout }) {
 
       //only update counts when session is active
       if (!sessionActive || sessionPaused) {
+        if (data.detectedSize) {
+          console.log('⚠️  [SENSOR] Skipping count - sessionActive:', sessionActive, 'sessionPaused:', sessionPaused);
+        }
         if (data.defective) {
           setDetectedSize('DEFECTIVE');
           setIsDefective(true);
@@ -297,7 +311,7 @@ function Dashboard({ user, token, onLogout }) {
         setIsDefective(true);
         setIsDefectiveFlag(true);
         setDetectedSize('DEFECTIVE');
-        console.log('🚨 Defective detected! Adding to count.');
+        console.log('🚨 [COUNT] Defective detected! Adding to count.');
         setSortingStats(prev => {
           const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
           countsRef.current = updated;  //keep ref synced
@@ -315,34 +329,42 @@ function Dashboard({ user, token, onLogout }) {
           if (mapped === 'SMALL') sizeIndex = 1;
           else if (mapped === 'MEDIUM') sizeIndex = 2;
           else if (mapped === 'LARGE') sizeIndex = 3;
+          console.log('📏 [SIZE PARSE] Received:', data.detectedSize, '-> sizeIndex:', sizeIndex);
         } else if (typeof data.detectedSize === 'number') {
           sizeIndex = data.detectedSize;
+          console.log('📏 [SIZE PARSE] Received number:', data.detectedSize, '-> sizeIndex:', sizeIndex);
         }
 
         switch (sizeIndex) {
           case 1:
             setDetectedSize('SMALL');
+            console.log('📦 [COUNT] SMALL detected - incrementing counter');
             setSortingStats(prev => {
               const updated = { ...prev, small: prev.small + 1, total: prev.total + 1 };
-              countsRef.current = updated;
+              countsRef.current = updated;  //keep ref synced
+              console.log('✅ [COUNT] Updated sortingStats:', updated);
               checkLimits(updated);
               return updated;
             });
             break;
           case 2:
             setDetectedSize('MEDIUM');
+            console.log('📦 [COUNT] MEDIUM detected - incrementing counter');
             setSortingStats(prev => {
               const updated = { ...prev, medium: prev.medium + 1, total: prev.total + 1 };
               countsRef.current = updated;
+              console.log('✅ [COUNT] Updated sortingStats:', updated);
               checkLimits(updated);
               return updated;
             });
             break;
           case 3:
             setDetectedSize('LARGE');
+            console.log('📦 [COUNT] LARGE detected - incrementing counter');
             setSortingStats(prev => {
               const updated = { ...prev, large: prev.large + 1, total: prev.total + 1 };
               countsRef.current = updated;
+              console.log('✅ [COUNT] Updated sortingStats:', updated);
               checkLimits(updated);
               return updated;
             });
@@ -419,7 +441,7 @@ function Dashboard({ user, token, onLogout }) {
         large: { ...prev.large, status: 'Inactive' }
       }));
     };
-  }, []);
+  }, [sessionActive, sessionPaused]);
 
   // CPU temperature monitor (RPi read from /sys/class/thermal/thermal_zone0/temp)
   useEffect(() => {
@@ -535,31 +557,52 @@ function Dashboard({ user, token, onLogout }) {
 
     const autosaveInterval = setInterval(async () => {
       try {
+        const countsToSave = {
+          small: countsRef.current.small,
+          medium: countsRef.current.medium,
+          large: countsRef.current.large,
+          defective: countsRef.current.defective
+        };
+        console.log('💾 [AUTOSAVE] Saving counts to DB:', countsToSave, 'for session:', currentSessionId);
+        
         const response = await fetch(`${BACKEND_URL}/api/sessions/${currentSessionId}`, {
           method: 'PUT',
           headers: { 
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify({
-            counts: {
-              small: countsRef.current.small,
-              medium: countsRef.current.medium,
-              large: countsRef.current.large,
-              defective: countsRef.current.defective
-            }
-          })
+          body: JSON.stringify({ counts: countsToSave })
         });
-        if (!response.ok) {
-          console.warn('Autosave counts failed:', response.statusText);
+        
+        if (response.ok) {
+          console.log('✅ [AUTOSAVE] Counts saved successfully');
+        } else {
+          console.warn('⚠️  [AUTOSAVE] Failed - status:', response.status);
         }
       } catch (err) {
-        console.warn('Error autosaving counts:', err);
+        console.warn('⚠️  [AUTOSAVE] Error:', err.message);
       }
     }, 3000);
 
     return () => clearInterval(autosaveInterval);
   }, [sessionActive, currentSessionId, token]);
+
+  // Keep the active session row in history updated while a batch is running
+  useEffect(() => {
+    if (!currentSessionId) return;
+    setSessions(prev => prev.map(session => {
+      if (session._id !== currentSessionId) return session;
+      return {
+        ...session,
+        counts: {
+          small: sortingStats.small,
+          medium: sortingStats.medium,
+          large: sortingStats.large,
+          defective: sortingStats.defective
+        }
+      };
+    }));
+  }, [sortingStats, currentSessionId]);
 
   // Delete all sessions on backend and clear local state
   const clearSessions = async () => {
@@ -1096,6 +1139,11 @@ function Dashboard({ user, token, onLogout }) {
                   onError={() => setCameraError('MJPEG stream unavailable. Is cam_stream.py running?')}
                 />
               </div>
+              {cameraError && (
+                <div style={{ marginTop: '8px', color: '#c62828', fontSize: '13px', fontWeight: 600 }}>
+                  {cameraError}
+                </div>
+              )}
               <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
                 Mode: MJPEG
               </p>

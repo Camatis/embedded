@@ -78,7 +78,6 @@ let enqueueFlushHandle = null;
 const HARDWARE_CONTROL_FILE = '/tmp/mangosort_control.json';
 let hardwareProcess = null;
 let hardwareRunning = false;
-let hardwareStarted = false; // Track if we've ever started the process
 
 function writeHardwareControlFile(running) {
   try {
@@ -94,16 +93,9 @@ async function ensureHardwareProcessRunning() {
     return true;
   }
 
-  // If process has exited, restart it
-  if (hardwareStarted) {
-    console.log('Hardware process exited, restarting...');
-    return await startHardwareProcess();
-  }
-
-  // First time startup
-  return await startHardwareProcess();
+  const result = await startHardwareProcess();
+  return result.success;
 }
-
 
 async function waitForHardwareReady() {
   const deadline = Date.now() + HARDWARE_READY_TIMEOUT_MS;
@@ -130,17 +122,9 @@ async function waitForHardwareReady() {
 
 async function startHardwareProcess() {
   console.log('Hardware start request received');
-  if (hardwareProcess && hardwareProcess.exitCode === null) {
-    console.log('Hardware process already running, resuming belt');
-    try {
-      await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'start' });
-      writeHardwareControlFile(true);
-      hardwareRunning = true;
-      return { success: true, message: 'Hardware belt resumed' };
-    } catch (err) {
-      console.error('Failed to resume hardware belt:', err);
-      return { success: false, message: err.message };
-    }
+  if (hardwareProcess) {
+    console.log('Hardware process already running');
+    return { success: true, message: 'Hardware already running' };
   }
 
   if (!fs.existsSync(PYTHON_HARDWARE_SCRIPT)) {
@@ -182,8 +166,6 @@ async function startHardwareProcess() {
       }
     });
 
-    hardwareStarted = true; // Mark that we've started the process
-
     hardwareProcess.on('spawn', () => {
       console.log(`Hardware process spawned with PID ${hardwareProcess.pid}`);
     });
@@ -204,8 +186,6 @@ async function startHardwareProcess() {
       console.log(`Hardware process exited with code ${code}`);
       hardwareProcess = null;
       hardwareRunning = false;
-      hardwareStarted = false; // Reset when process exits
-      // Note: We don't auto-restart here; let ensureHardwareProcessRunning handle it
     });
 
     const ready = await waitForHardwareReady();
@@ -215,7 +195,6 @@ async function startHardwareProcess() {
       if (hardwareProcess && hardwareProcess.exitCode !== null) {
         console.error(`Hardware process exited with code ${hardwareProcess.exitCode}`);
         hardwareProcess = null;
-        hardwareStarted = false;
         return { success: false, message: `Hardware failed to start: exited with code ${hardwareProcess.exitCode}` };
       }
       writeHardwareControlFile(true);
@@ -232,22 +211,30 @@ async function startHardwareProcess() {
       hardwareProcess.kill('SIGTERM');
       hardwareProcess = null;
     }
-    hardwareStarted = false;
     return { success: false, message: err.message };
   }
 }
 
+function stopHardwareProcess() {
+  if (!hardwareProcess) {
+    console.log('No hardware process running');
+    return { success: false, message: 'No hardware process to stop' };
+  }
 
-async function stopHardwareProcess() {
-  console.log('Hardware stop request received - pausing belt instead of killing process');
-  // Instead of killing the process, just pause the belt
   try {
-    await ensureHardwareProcessRunning();
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'stop' });
+    console.log('Stopping hardware controller...');
     writeHardwareControlFile(false);
-    return { success: true, message: 'Hardware belt stopped (process remains running)' };
+    
+    if (hardwareProcess) {
+      hardwareProcess.kill('SIGTERM');
+      hardwareProcess = null;
+    }
+    
+    return { success: true, message: 'Hardware process stopped' };
   } catch (err) {
-    console.error('Failed to stop hardware belt:', err);
+    console.error('Failed to stop hardware process:', err);
+    hardwareProcess = null;
+    return { success: false, message: err.message };
   }
 }
 
@@ -621,22 +608,12 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
     const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole));
 
     const merged = [...local, ...queued, ...sessions];
-    const uniqueSessions = new Map();
-    for (const session of merged) {
-      if (!session) continue;
-      const key = session.local_id || session._id || session._id?.toString();
-      if (!key) continue;
-      if (!uniqueSessions.has(key) || (session._id && uniqueSessions.get(key)._id !== session._id)) {
-        uniqueSessions.set(key, session);
-      }
-    }
-    const deduped = Array.from(uniqueSessions.values());
-    deduped.sort((a, b) => {
+    merged.sort((a, b) => {
       const aTime = new Date(a.timestamps?.start_time || 0).getTime();
       const bTime = new Date(b.timestamps?.start_time || 0).getTime();
       return bTime - aTime;
     });
-    return res.json(deduped);
+    return res.json(merged);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
     const { userId, userRole } = await getRequestUserContext(req);
@@ -928,8 +905,8 @@ app.post('/api/hardware/start', async (req, res) => {
 });
 
 // POST: Stop hardware controller process
-app.post('/api/hardware/stop', async (req, res) => {
-  const result = await stopHardwareProcess();
+app.post('/api/hardware/stop', (req, res) => {
+  const result = stopHardwareProcess();
   const status = result.success ? 200 : 500;
   res.status(status).json(result);
 });

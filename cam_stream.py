@@ -37,7 +37,12 @@ model_lock = threading.Lock()
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_FPS = 15
-MODEL_PATH = os.path.join(os.path.dirname(__file__), 'final_weights.pt')
+MODEL_PATH = os.environ.get(
+    'YOLO_MODEL_PATH',
+    os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
+)
+
+last_detection_count = 0
 
 
 def init_camera():
@@ -72,7 +77,9 @@ def init_yolo_model():
 
 def draw_bounding_boxes(frame, yolo_model):
     """Run YOLO inference and draw bounding boxes on the frame."""
+    global last_detection_count
     if yolo_model is None:
+        last_detection_count = 0
         return frame
     
     try:
@@ -82,22 +89,28 @@ def draw_bounding_boxes(frame, yolo_model):
         if results and len(results) > 0:
             result = results[0]
             boxes = result.boxes
+            current_count = int(len(boxes)) if boxes is not None else 0
+            if current_count != last_detection_count:
+                print(f"✓ YOLO detections: {current_count}")
+                last_detection_count = current_count
             
-            if boxes is not None and len(boxes) > 0:
+            if boxes is not None and current_count > 0:
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     conf = float(box.conf[0])
-                    cls = int(box.cls[0])
                     
                     # Draw bounding box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     
                     # Draw label with confidence
                     label = f"Mango {conf:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), 
+                    cv2.putText(frame, label, (x1, max(20, y1 - 10)), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        else:
+            last_detection_count = 0
     except Exception as e:
         print(f"⚠ YOLO inference error: {e}")
+        last_detection_count = 0
     
     return frame
 
@@ -138,6 +151,14 @@ def snapshot():
     frame = draw_bounding_boxes(frame, yolo_model)
     _, jpeg = cv2.imencode('.jpg', frame)
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
+
+@app.route('/detection-status')
+def detection_status():
+    return jsonify({
+        'model_loaded': yolo_model is not None,
+        'model_path': MODEL_PATH,
+        'last_detection_count': last_detection_count
+    })
 
 class CameraTrack(VideoStreamTrack):
     def __init__(self, width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
@@ -237,7 +258,7 @@ def home():
 
 if __name__ == '__main__':
     print("Starting Mango Sorter Camera Stream on port 8081...")
-    print("Access endpoint: http://127.0.0.1:8081/offer")
-    print("MJPEG endpoint: http://127.0.0.1:8081/mjpeg")
-    print("Snapshot endpoint: http://127.0.0.1:8081/snapshot")
-    app.run(host='127.0.0.1', port=8081, debug=False, threaded=True)
+    print("Access endpoint: http://0.0.0.0:8081/offer")
+    print("MJPEG endpoint: http://0.0.0.0:8081/mjpeg")
+    print("Snapshot endpoint: http://0.0.0.0:8081/snapshot")
+    app.run(host='0.0.0.0', port=8081, debug=False, threaded=True)
