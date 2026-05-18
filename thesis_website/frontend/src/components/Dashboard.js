@@ -95,6 +95,7 @@ function Dashboard({ user, token, onLogout }) {
   const [passwordMessage, setPasswordMessage] = useState('');
   //track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
+  const lastDetectedRef = useRef({ size: null, timestamp: null });
 
   const controlGate = async (gate, action) => {
     try {
@@ -290,10 +291,10 @@ function Dashboard({ user, token, onLogout }) {
         large: { ...prev.large, detecting: data.large }
       }));
 
-      //only update counts when session is active
-      if (!sessionActive || sessionPaused) {
+      //only update counts when session is active or paused with an existing batch
+      if (!currentSessionId) {
         if (data.detectedSize) {
-          console.log('⚠️  [SENSOR] Skipping count - sessionActive:', sessionActive, 'sessionPaused:', sessionPaused);
+          console.log('⚠️  [SENSOR] Skipping count - no current session active or paused');
         }
         if (data.defective) {
           setDetectedSize('DEFECTIVE');
@@ -306,84 +307,78 @@ function Dashboard({ user, token, onLogout }) {
         return;
       }
 
-      //check if defective
+      const countsSource = data.counts && typeof data.counts.small === 'number'
+        ? {
+            small: data.counts.small,
+            medium: data.counts.medium,
+            large: data.counts.large,
+            defective: data.counts.defective,
+            total: typeof data.counts.total === 'number'
+              ? data.counts.total
+              : (data.counts.small + data.counts.medium + data.counts.large + data.counts.defective)
+          }
+        : null;
+
+      if (countsSource) {
+        const needsSync = countsSource.small !== countsRef.current.small
+          || countsSource.medium !== countsRef.current.medium
+          || countsSource.large !== countsRef.current.large
+          || countsSource.defective !== countsRef.current.defective
+          || countsSource.total !== countsRef.current.total;
+
+        if (needsSync) {
+          console.log('🔄 [SYNC] Hardware count snapshot received, syncing counts:', countsSource);
+          setSortingStats(prev => {
+            const updated = { ...prev, ...countsSource };
+            countsRef.current = updated;
+            return updated;
+          });
+        }
+      }
+
+      const mangoKey = data.lastMango?.timestamp
+        ? `${data.lastMango.timestamp}-${String(data.detectedSize || '').toUpperCase()}`
+        : null;
+
+      const updateDetectedSize = (newSize) => {
+        setDetectedSize(newSize);
+        setIsDefective(newSize === 'DEFECTIVE');
+        setIsDefectiveFlag(newSize === 'DEFECTIVE');
+      };
+
       if (data.defective) {
-        setIsDefective(true);
-        setIsDefectiveFlag(true);
-        setDetectedSize('DEFECTIVE');
-        console.log('🚨 [COUNT] Defective detected! Adding to count.');
-        setSortingStats(prev => {
-          const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
-          countsRef.current = updated;  //keep ref synced
-          checkLimits(updated);
-          return updated;
-        });
-      } else {
-        setIsDefective(false);
-        setIsDefectiveFlag(false);
-
-        // normalize detectedSize from servotest.py (string) to numeric index for UI counters
-        let sizeIndex = null;
-        if (typeof data.detectedSize === 'string') {
-          const mapped = data.detectedSize.trim().toUpperCase();
-          if (mapped === 'SMALL') sizeIndex = 1;
-          else if (mapped === 'MEDIUM') sizeIndex = 2;
-          else if (mapped === 'LARGE') sizeIndex = 3;
-          console.log('📏 [SIZE PARSE] Received:', data.detectedSize, '-> sizeIndex:', sizeIndex);
-        } else if (typeof data.detectedSize === 'number') {
-          sizeIndex = data.detectedSize;
-          console.log('📏 [SIZE PARSE] Received number:', data.detectedSize, '-> sizeIndex:', sizeIndex);
-        }
-
-        switch (sizeIndex) {
-          case 1:
-            setDetectedSize('SMALL');
-            console.log('📦 [COUNT] SMALL detected - incrementing counter');
-            setSortingStats(prev => {
-              const updated = { ...prev, small: prev.small + 1, total: prev.total + 1 };
-              countsRef.current = updated;  //keep ref synced
-              console.log('✅ [COUNT] Updated sortingStats:', updated);
-              checkLimits(updated);
-              return updated;
-            });
-            break;
-          case 2:
-            setDetectedSize('MEDIUM');
-            console.log('📦 [COUNT] MEDIUM detected - incrementing counter');
-            setSortingStats(prev => {
-              const updated = { ...prev, medium: prev.medium + 1, total: prev.total + 1 };
-              countsRef.current = updated;
-              console.log('✅ [COUNT] Updated sortingStats:', updated);
-              checkLimits(updated);
-              return updated;
-            });
-            break;
-          case 3:
-            setDetectedSize('LARGE');
-            console.log('📦 [COUNT] LARGE detected - incrementing counter');
-            setSortingStats(prev => {
-              const updated = { ...prev, large: prev.large + 1, total: prev.total + 1 };
-              countsRef.current = updated;
-              console.log('✅ [COUNT] Updated sortingStats:', updated);
-              checkLimits(updated);
-              return updated;
-            });
-            break;
-          default:
-            setDetectedSize('NONE');
-        }
-
-        //add to history
-        if (sizeIndex >= 1 && sizeIndex <= 3) {
-          const timestamp = new Date().toLocaleTimeString();
+        if (mangoKey && mangoKey !== lastDetectedRef.current.key) {
+          lastDetectedRef.current.key = mangoKey;
+          updateDetectedSize('DEFECTIVE');
+          console.log('🚨 [COUNT] Defective detected from hardware snapshot');
           setSortingHistory(prev => {
-            const newHistory = [...prev, {
-              timestamp,
-              size: sizeIndex === 1 ? 'SMALL' : sizeIndex === 2 ? 'MEDIUM' : 'LARGE'
-            }];
+            const newHistory = [...prev, { timestamp: new Date().toLocaleTimeString(), size: 'DEFECTIVE' }];
             return newHistory.slice(-100);
           });
         }
+        return;
+      }
+
+      let sizeIndex = null;
+      if (typeof data.detectedSize === 'string') {
+        const mapped = data.detectedSize.trim().toUpperCase();
+        if (mapped === 'SMALL') sizeIndex = 1;
+        else if (mapped === 'MEDIUM') sizeIndex = 2;
+        else if (mapped === 'LARGE') sizeIndex = 3;
+        console.log('📏 [SIZE PARSE] Received:', data.detectedSize, '-> sizeIndex:', sizeIndex);
+      } else if (typeof data.detectedSize === 'number') {
+        sizeIndex = data.detectedSize;
+        console.log('📏 [SIZE PARSE] Received number:', data.detectedSize, '-> sizeIndex:', sizeIndex);
+      }
+
+      if (sizeIndex >= 1 && sizeIndex <= 3 && mangoKey && mangoKey !== lastDetectedRef.current.key) {
+        lastDetectedRef.current.key = mangoKey;
+        const sizeLabel = sizeIndex === 1 ? 'SMALL' : sizeIndex === 2 ? 'MEDIUM' : 'LARGE';
+        updateDetectedSize(sizeLabel);
+        setSortingHistory(prev => {
+          const newHistory = [...prev, { timestamp: new Date().toLocaleTimeString(), size: sizeLabel }];
+          return newHistory.slice(-100);
+        });
       }
     } catch (error) {
       console.error('Error processing sensor data:', error);
@@ -415,11 +410,21 @@ function Dashboard({ user, token, onLogout }) {
           medium: !!data.medium,
           large: !!data.large,
           defective: !!data.defective,
-          detectedSize: data.detectedSize
+          detectedSize: data.detectedSize,
+          counts: data.counts || {},
+          lastMango: data.lastMango || {}
         };
         
         // Log received data for debugging
-        if (data.defective) console.log('📡 Received from backend - DEFECTIVE:', data);
+        if (data.defective || data.detectedSize) {
+          console.log('📡 Received from backend sensor endpoint:', {
+            detectedSize: data.detectedSize,
+            counts: normalized.counts,
+            lastMango: normalized.lastMango,
+            sessionActive,
+            sessionPaused
+          });
+        }
 
         if (mounted) handleSensorData(normalized);
       } catch (err) {

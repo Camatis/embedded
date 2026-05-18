@@ -990,6 +990,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
             large: data.sensors?.large ?? false,
             defective: data.last_mango?.health === 'DEFECTIVE',
             detectedSize: data.last_mango?.size ?? null,
+            lastMango: data.last_mango || null,
             timestamp: Date.now(),
             online: true,
             state: data.state || 'unknown',
@@ -997,7 +998,19 @@ app.get('/api/hardware/sensors', async (req, res) => {
         });
     } catch (error) {
         console.error('Error getting sensor data:', error?.message || error);
-        res.status(500).json({ trigger: false, medium: false, large: false, defective: false, detectedSize: null, timestamp: Date.now(), offline: true, state: 'offline', counts: {} });
+        res.status(500).json({
+            trigger: false,
+            medium: false,
+            large: false,
+            defective: false,
+            detectedSize: null,
+            lastMango: null,
+            timestamp: Date.now(),
+            online: false,
+            offline: true,
+            state: 'offline',
+            counts: {}
+        });
     }
 });
 

@@ -75,11 +75,26 @@ def init_yolo_model():
         return None
 
 
+def normalize_frame(frame):
+    if frame is None:
+        return None
+    if frame.ndim == 2:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.shape[2] == 4:
+        return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+    if frame.shape[2] == 1:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    return frame
+
+
 def draw_bounding_boxes(frame, yolo_model):
     """Run YOLO inference and draw bounding boxes on the frame."""
     global last_detection_count
     if yolo_model is None:
         last_detection_count = 0
+        return frame
+    frame = normalize_frame(frame)
+    if frame is None:
         return frame
     
     try:
@@ -123,6 +138,7 @@ def mjpeg_generator(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
         while True:
             with camera_lock:
                 frame = camera.capture_array()
+            frame = normalize_frame(frame)
             
             # Draw bounding boxes
             frame = draw_bounding_boxes(frame, yolo_model)
@@ -187,6 +203,7 @@ class CameraTrack(VideoStreamTrack):
             try:
                 with camera_lock:
                     frame = camera.capture_array()
+                frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)  # vertically flip if needed
                 
                 # Draw bounding boxes
