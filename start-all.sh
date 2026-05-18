@@ -30,10 +30,30 @@ echo "   ✓ Frontend PID: $FRONTEND_PID"
 # Wait for frontend to start
 sleep 5
 
+# Activate virtual environment (located at ~/virtual_env/myenv)
+if [ -f ../virtual_env/myenv/bin/activate ]; then
+  source ../virtual_env/myenv/bin/activate
+else
+  echo "   ⚠ Virtual environment not found at ../virtual_env/myenv"
+fi
+
+# for starting Servotest (Hardware Controller) - CRITICAL
+echo "Starting Servotest Hardware Controller..."
+if [ -f servotest.py ]; then
+  python3 servotest.py > /tmp/servotest.log 2>&1 &
+  SERVOTEST_PID=$!
+  echo "   ✓ Servotest PID: $SERVOTEST_PID"
+else
+  echo "   ⚠ servotest.py not found"
+fi
+
+# Wait for servotest to initialize
+sleep 3
+
 # for starting Temperature Monitor
 echo "Starting Temperature Monitor..."
-if [ -f ../temp_monitor.py ]; then
-  python3 ../temp_monitor.py > /tmp/temp_monitor.log 2>&1 &
+if [ -f temp_monitor.py ]; then
+  python3 temp_monitor.py > /tmp/temp_monitor.log 2>&1 &
   TEMP_MONITOR_PID=$!
   echo "   ✓ Temp Monitor PID: $TEMP_MONITOR_PID"
 else
@@ -42,8 +62,8 @@ fi
 
 # for starting Camera Stream (MJPEG)
 echo "Starting Camera Stream..."
-if [ -f ../cam_stream.py ]; then
-  python3 ../cam_stream.py > /tmp/cam_stream.log 2>&1 &
+if [ -f cam_stream.py ]; then
+  python3 cam_stream.py > /tmp/cam_stream.log 2>&1 &
   CAM_STREAM_PID=$!
   echo "   ✓ Cam Stream PID: $CAM_STREAM_PID"
 else
@@ -92,7 +112,7 @@ echo "════════════════════════�
 echo ""
 
 # Kill all services using Ctrl+C
-trap "echo ''; echo 'Shutting down all services...'; kill $BACKEND_PID $FRONTEND_PID $TEMP_MONITOR_PID $CAM_STREAM_PID $SERVOTEST_PID 2>/dev/null; echo 'All services stopped.'; exit 0" INT
+trap "echo ''; echo 'Shutting down all services...'; kill $BACKEND_PID $FRONTEND_PID $SERVOTEST_PID $TEMP_MONITOR_PID $CAM_STREAM_PID 2>/dev/null; echo 'All services stopped.'; exit 0" INT
 
 wait
 
