@@ -529,6 +529,38 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
+  // Autosave counts periodically while session is active
+  useEffect(() => {
+    if (!sessionActive || !currentSessionId) return;
+
+    const autosaveInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/sessions/${currentSessionId}`, {
+          method: 'PUT',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            counts: {
+              small: countsRef.current.small,
+              medium: countsRef.current.medium,
+              large: countsRef.current.large,
+              defective: countsRef.current.defective
+            }
+          })
+        });
+        if (!response.ok) {
+          console.warn('Autosave counts failed:', response.statusText);
+        }
+      } catch (err) {
+        console.warn('Error autosaving counts:', err);
+      }
+    }, 3000);
+
+    return () => clearInterval(autosaveInterval);
+  }, [sessionActive, currentSessionId, token]);
+
   // Delete all sessions on backend and clear local state
   const clearSessions = async () => {
     try {

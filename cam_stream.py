@@ -24,6 +24,7 @@ from av import VideoFrame
 from picamera2 import Picamera2
 import os
 import sys
+from ultralytics import YOLO
 
 app = Flask(__name__)
 pcs = set()
@@ -31,9 +32,12 @@ pcs = set()
 # Single shared camera instance and lock to prevent concurrent Picamera2 opens
 camera = None
 camera_lock = threading.Lock()
+yolo_model = None
+model_lock = threading.Lock()
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_FPS = 15
+MODEL_PATH = os.path.join(os.path.dirname(__file__), 'final_weights.pt')
 
 
 def init_camera():
@@ -49,13 +53,67 @@ def init_camera():
     return camera
 
 
+def init_yolo_model():
+    global yolo_model
+    if yolo_model is not None:
+        return yolo_model
+    
+    try:
+        if not os.path.exists(MODEL_PATH):
+            print(f"⚠ YOLO model not found at {MODEL_PATH}, skipping detection")
+            return None
+        yolo_model = YOLO(MODEL_PATH)
+        print(f"✓ YOLO model loaded from {MODEL_PATH}")
+        return yolo_model
+    except Exception as e:
+        print(f"⚠ Failed to load YOLO model: {e}")
+        return None
+
+
+def draw_bounding_boxes(frame, yolo_model):
+    """Run YOLO inference and draw bounding boxes on the frame."""
+    if yolo_model is None:
+        return frame
+    
+    try:
+        with model_lock:
+            results = yolo_model(frame, verbose=False, conf=0.5)
+        
+        if results and len(results) > 0:
+            result = results[0]
+            boxes = result.boxes
+            
+            if boxes is not None and len(boxes) > 0:
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    conf = float(box.conf[0])
+                    cls = int(box.cls[0])
+                    
+                    # Draw bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    
+                    # Draw label with confidence
+                    label = f"Mango {conf:.2f}"
+                    cv2.putText(frame, label, (x1, y1 - 10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    except Exception as e:
+        print(f"⚠ YOLO inference error: {e}")
+    
+    return frame
+
+
 # MJPEG stream fallback for web UI (option A)
 def mjpeg_generator(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
     init_camera()
+    init_yolo_model()
     try:
         while True:
             with camera_lock:
                 frame = camera.capture_array()
+            
+            # Draw bounding boxes
+            frame = draw_bounding_boxes(frame, yolo_model)
+            
             ret, jpeg = cv2.imencode('.jpg', frame)
             if ret:
                 frame_bytes = jpeg.tobytes()
@@ -74,8 +132,10 @@ def mjpeg_stream():
 @app.route('/snapshot')
 def snapshot():
     init_camera()
+    init_yolo_model()
     with camera_lock:
         frame = camera.capture_array()
+    frame = draw_bounding_boxes(frame, yolo_model)
     _, jpeg = cv2.imencode('.jpg', frame)
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
@@ -89,6 +149,7 @@ class CameraTrack(VideoStreamTrack):
 
         try:
             init_camera()
+            init_yolo_model()
             self.camera_available = True
             print("✓ Camera initialized for WebRTC via shared Picamera2")
         except Exception as e:
@@ -106,6 +167,9 @@ class CameraTrack(VideoStreamTrack):
                 with camera_lock:
                     frame = camera.capture_array()
                 frame = cv2.flip(frame, 0)  # vertically flip if needed
+                
+                # Draw bounding boxes
+                frame = draw_bounding_boxes(frame, yolo_model)
             except Exception as e:
                 print(f"⚠ Camera read error: {e}")
                 frame = 255 * np.zeros((self.height, self.width, 3), np.uint8)

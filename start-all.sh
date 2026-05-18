@@ -30,6 +30,9 @@ echo "   ✓ Frontend PID: $FRONTEND_PID"
 # Wait for frontend to start
 sleep 5
 
+# Return to embedded directory
+cd ../..
+
 # Activate virtual environment (located at ~/virtual_env/myenv)
 if [ -f ../virtual_env/myenv/bin/activate ]; then
   source ../virtual_env/myenv/bin/activate
