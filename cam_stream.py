@@ -134,8 +134,10 @@ def draw_bounding_boxes(frame, yolo_model):
 def mjpeg_generator(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
     init_camera()
     init_yolo_model()
+    frame_interval = 1.0 / fps if fps > 0 else 0.1
     try:
         while True:
+            start = time.time()
             with camera_lock:
                 frame = camera.capture_array()
             frame = normalize_frame(frame)
@@ -148,6 +150,11 @@ def mjpeg_generator(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
                 frame_bytes = jpeg.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+            elapsed = time.time() - start
+            sleep_time = max(0, frame_interval - elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
     except GeneratorExit:
         return
 

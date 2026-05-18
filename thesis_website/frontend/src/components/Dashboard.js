@@ -291,31 +291,24 @@ function Dashboard({ user, token, onLogout }) {
         large: { ...prev.large, detecting: data.large }
       }));
 
-      //only update counts when session is active or paused with an existing batch
-      if (!currentSessionId) {
-        if (data.detectedSize) {
-          console.log('⚠️  [SENSOR] Skipping count - no current session active or paused');
+      const parseCount = (value) => {
+        if (typeof value === 'number') return value;
+        if (typeof value === 'string' && value.trim() !== '') {
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? parsed : 0;
         }
-        if (data.defective) {
-          setDetectedSize('DEFECTIVE');
-          setIsDefective(true);
-          setIsDefectiveFlag(true);
-        } else {
-          setIsDefective(false);
-          setIsDefectiveFlag(false);
-        }
-        return;
-      }
+        return 0;
+      };
 
-      const countsSource = data.counts && typeof data.counts.small === 'number'
+      const countsSource = data.counts && (data.counts.small !== undefined || data.counts.medium !== undefined || data.counts.large !== undefined || data.counts.defective !== undefined)
         ? {
-            small: data.counts.small,
-            medium: data.counts.medium,
-            large: data.counts.large,
-            defective: data.counts.defective,
+            small: parseCount(data.counts.small),
+            medium: parseCount(data.counts.medium),
+            large: parseCount(data.counts.large),
+            defective: parseCount(data.counts.defective),
             total: typeof data.counts.total === 'number'
               ? data.counts.total
-              : (data.counts.small + data.counts.medium + data.counts.large + data.counts.defective)
+              : parseCount(data.counts.small) + parseCount(data.counts.medium) + parseCount(data.counts.large) + parseCount(data.counts.defective)
           }
         : null;
 
@@ -328,12 +321,29 @@ function Dashboard({ user, token, onLogout }) {
 
         if (needsSync) {
           console.log('🔄 [SYNC] Hardware count snapshot received, syncing counts:', countsSource);
-          setSortingStats(prev => {
-            const updated = { ...prev, ...countsSource };
-            countsRef.current = updated;
-            return updated;
-          });
+          countsRef.current = countsSource;
+          setSortingStats(prev => ({ ...prev, ...countsSource }));
         }
+      }
+
+      if (!currentSessionId) {
+        if (!countsSource) {
+          if (data.defective || data.detectedSize) {
+            console.log('⚠️  [SENSOR] Current session missing but sensor event received:', data.detectedSize || 'DEFECTIVE');
+          }
+        }
+
+        if (data.defective) {
+          setDetectedSize('DEFECTIVE');
+          setIsDefective(true);
+          setIsDefectiveFlag(true);
+        } else if (data.detectedSize) {
+          const sizeLabel = String(data.detectedSize).toUpperCase();
+          setDetectedSize(sizeLabel);
+          setIsDefective(false);
+          setIsDefectiveFlag(false);
+        }
+        return;
       }
 
       const mangoKey = data.lastMango?.timestamp
