@@ -626,7 +626,26 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
       const bTime = new Date(b.timestamps?.start_time || 0).getTime();
       return bTime - aTime;
     });
-    return res.json(deduped);
+
+    // Remove orphan placeholder sessions that were created but never finalized.
+    // These typically have no end_time and zero counts, while a completed batch exists for the same session_name/start_time.
+    const cleaned = deduped.filter(session => {
+      const counts = session.counts || {};
+      const isZeroCount = (counts.small || 0) === 0 && (counts.medium || 0) === 0 && (counts.large || 0) === 0 && (counts.defective || 0) === 0;
+      const noEndTime = !session.timestamps?.end_time;
+      if (!isZeroCount || !noEndTime) return true;
+
+      return !deduped.some(other =>
+        other._id !== session._id &&
+        other.session_name === session.session_name &&
+        other.timestamps?.start_time &&
+        session.timestamps?.start_time &&
+        new Date(other.timestamps.start_time).getTime() === new Date(session.timestamps.start_time).getTime() &&
+        other.timestamps?.end_time
+      );
+    });
+
+    return res.json(cleaned);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
     const { userId, userRole } = await getRequestUserContext(req);
