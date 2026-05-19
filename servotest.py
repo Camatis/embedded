@@ -53,7 +53,7 @@ conveyor_lock = threading.Lock()
 
 def set_conveyor_speed(target_speed):
     """Ramp the conveyor speed up or down to avoid sudden speed changes."""
-    global current_conveyor_speed
+    global current_conveyor_speed, conveyor_state
     target_speed = max(0, min(100, target_speed))
 
     with conveyor_lock:
@@ -68,6 +68,7 @@ def set_conveyor_speed(target_speed):
 
         conveyor_pwm.ChangeDutyCycle(target_speed)
         current_conveyor_speed = target_speed
+        conveyor_state = "running" if target_speed > 0 else "stopped"
         if target_speed == 0:
             # Let the belt settle cleanly before accepting the next batch
             time.sleep(0.12)
@@ -123,6 +124,8 @@ count_total = 0
 # Global control state
 sorting_active = False
 sorting_paused = False
+batch_state = "idle"  # idle, running, paused, stopped
+conveyor_state = "stopped"  # stopped or running
 state_lock = threading.Lock()
 last_mango = {"size": None, "health": None, "timestamp": None}
 events_log = []
@@ -178,33 +181,39 @@ def get_hardware_status():
             'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW
         },
         'state': 'active' if sorting_active else ('paused' if sorting_paused else 'idle'),
+        'batch_state': batch_state,
+        'conveyor_state': conveyor_state,
         'last_mango': last_mango
     })
 
 @app.route('/api/hardware/control', methods=['POST'])
 def hardware_control():
-    global sorting_active, sorting_paused
+    global sorting_active, sorting_paused, batch_state
     data = request.get_json()
     action = data.get('action')
     
     if action == 'start':
         sorting_active = True
         sorting_paused = False
+        batch_state = 'running'
         set_conveyor_speed(CONVEYOR_SPEED)
         return jsonify({'success': True, 'message': 'Sorting started'})
     elif action == 'pause':
         sorting_active = False
         sorting_paused = True
+        batch_state = 'paused'
         set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting paused'})
     elif action == 'resume':
         sorting_active = True
         sorting_paused = False
+        batch_state = 'running'
         set_conveyor_speed(CONVEYOR_SPEED)
         return jsonify({'success': True, 'message': 'Sorting resumed'})
     elif action == 'stop':
         sorting_active = False
         sorting_paused = False
+        batch_state = 'stopped'
         set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting stopped'})
     
