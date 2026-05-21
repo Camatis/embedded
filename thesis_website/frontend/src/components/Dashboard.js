@@ -31,6 +31,7 @@ function Dashboard({ user, token, onLogout }) {
   const [editingName, setEditingName] = useState('');
   const videoRef = useRef(null);
   const [cameraError, setCameraError] = useState(null);
+  const [cameraStatus, setCameraStatus] = useState('Disconnected');
   const [cameraReloadKey, setCameraReloadKey] = useState(0);
   const pcRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -189,6 +190,79 @@ function Dashboard({ user, token, onLogout }) {
       return { running: false, process_active: false };
     }
   };
+
+  const initWebRTCStream = async () => {
+    setCameraError(null);
+    setCameraStatus('Connecting...');
+
+    if (!videoRef.current) {
+      setCameraError('Camera element not mounted yet');
+      setCameraStatus('Error');
+      return;
+    }
+
+    try {
+      if (pcRef.current) {
+        pcRef.current.close();
+      }
+
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+
+      pc.oniceconnectionstatechange = () => {
+        setCameraStatus(pc.iceConnectionState);
+      };
+
+      pc.ontrack = (event) => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = event.streams[0];
+        }
+      };
+
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const response = await fetch(`${BACKEND_URL}/api/webrtc-offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'offer',
+          sdp: offer.sdp
+        })
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`WebRTC offer failed: ${response.status} ${body}`);
+      }
+
+      const answer = await response.json();
+      await pc.setRemoteDescription(answer);
+      setCameraStatus('Connected');
+    } catch (err) {
+      console.error('WebRTC init failed:', err);
+      setCameraError(err.message || 'Failed to connect camera stream');
+      setCameraStatus('Error');
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (currentView !== 'dashboard') return;
+    initWebRTCStream();
+
+    return () => {
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    };
+  }, [currentView]);
 
   const stopSessionImmediately = async () => {
     if (!sessionActive && !sessionPaused) return;
@@ -858,11 +932,14 @@ function Dashboard({ user, token, onLogout }) {
   // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
-      // fast UI response
       const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
       setSortingStats(initialCounts);
       countsRef.current = initialCounts;
-      setSessionActive(true);
+      setSortingHistory([]);
+      setDetectedSize('NONE');
+      setIsDefective(false);
+      setIsDefectiveFlag(false);
+      setSessionActive(false);
       setSessionPaused(false);
       setHardwareAlert('Starting new batch (offline-safe)...');
 
@@ -889,7 +966,7 @@ function Dashboard({ user, token, onLogout }) {
         const created = await res.json();
         const newId = created._id || created.data?._id || (created.offline && created.data?._id) || null;
         setCurrentSessionId(newId);
-        setHardwareAlert('New batch started');
+        setHardwareAlert('Batch record created');
       } else {
         const errorText = await res.text();
         console.error('Failed to start session', errorText);
@@ -898,17 +975,33 @@ function Dashboard({ user, token, onLogout }) {
 
       // Start the sorting process by launching the hardware controller program
       const startResult = await startHardware();
+      const conveyorResult = await controlConveyor('start');
+      const active = startResult.success && conveyorResult.success;
+
       if (!startResult.success) {
         console.error('Hardware start failed:', startResult);
         setHardwareAlert(`Hardware start failed: ${startResult.message}`);
       }
+      if (!conveyorResult.success) {
+        console.error('Conveyor start failed');
+      }
 
-      await controlConveyor('start');
-      fetchSessions();
+      if (active) {
+        setSessionActive(true);
+        setSessionPaused(false);
+        setHardwareAlert('New batch started');
+      } else {
+        setSessionActive(false);
+        setSessionPaused(false);
+        setHardwareAlert('Batch created; hardware not yet ready. Start the conveyor once ready.');
+      }
+
+      await fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
       setHardwareAlert(`Error starting batch: ${err.message}`);
       setSessionActive(false);
+      setSessionPaused(false);
     }
   };
 
@@ -1161,12 +1254,12 @@ function Dashboard({ user, token, onLogout }) {
                 <h2>Live Camera Feed</h2>
               </div>
               <div className="camera-container">
-                <img
-                  key={cameraReloadKey}
-                  src={`${window.location.protocol}//${window.location.hostname}:8081/mjpeg?t=${cameraReloadKey}`}
-                  alt="MJPEG camera stream"
-                  style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px' }}
-                  onError={() => setCameraError('MJPEG stream unavailable. Is cam_stream.py running?')}
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px', backgroundColor: '#000' }}
                 />
               </div>
               {cameraError && (
@@ -1175,7 +1268,7 @@ function Dashboard({ user, token, onLogout }) {
                 </div>
               )}
               <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
-                Mode: MJPEG
+                Camera status: {cameraStatus}
               </p>
             </div>
 
