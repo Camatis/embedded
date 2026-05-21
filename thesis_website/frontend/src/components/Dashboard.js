@@ -939,10 +939,12 @@ function Dashboard({ user, token, onLogout }) {
   // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
-      // Set grace period flag to prevent stale counts from syncing back
+      // Set grace period flag to prevent stale counts from syncing back (1 second - hardware now resets)
       resetInProgressRef.current = true;
+      console.log('🔄 [RESET] Starting new batch - hardware resetting counts...');
       setTimeout(() => {
         resetInProgressRef.current = false;
+        console.log('✓ [RESET] Grace period ended - accepting fresh counts');
       }, 1000);
 
       const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };

@@ -1062,9 +1062,13 @@ app.get('/api/hardware/sensors', async (req, res) => {
         const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`);
         const data = response.data || {};
         
-        // If counts were recently cleared, suppress hardware counts for 2 seconds to allow fresh sync
-        const countsGracePeriodMs = 2000;
+        // If counts were recently cleared, suppress hardware counts for 1 second to allow reset to complete
+        const countsGracePeriodMs = 1000;
         const suppress = countsResetTimestamp && (Date.now() - countsResetTimestamp) < countsGracePeriodMs;
+        
+        if (suppress) {
+            console.log(`[Grace Period] Suppressing hardware counts for ${Math.round((countsGracePeriodMs - (Date.now() - countsResetTimestamp)) / 1000)}s more`);
+        }
         
         res.json({
             trigger: data.sensors?.trigger ?? false,
@@ -1133,9 +1137,18 @@ app.get('/api/sensor-data', (req, res) => {
 });
 
 // Clears sensor data (called when batch stops)
-app.post('/api/clear-sensor-data', (req, res) => {
+app.post('/api/clear-sensor-data', async (req, res) => {
   lastSensorData = null;
   countsResetTimestamp = Date.now();  // Mark counts as cleared
+  
+  // Also reset hardware controller counts
+  try {
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/reset-counts`, {});
+    console.log('✓ Hardware counts reset');
+  } catch (err) {
+    console.warn('Failed to reset hardware counts:', err?.message || err);
+  }
+  
   res.json({ success: true, message: 'Sensor data cleared' });
 });
 

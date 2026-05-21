@@ -272,6 +272,31 @@ def get_gate_status():
         }
     })
 
+@app.route('/api/hardware/reset-counts', methods=['POST'])
+def reset_counts():
+    """Reset all batch counts to zero for a new batch"""
+    global count_small, count_medium, count_large, count_defective, count_total, last_mango
+    
+    count_small = 0
+    count_medium = 0
+    count_large = 0
+    count_defective = 0
+    count_total = 0
+    last_mango = {"size": None, "health": None, "timestamp": None}
+    
+    print("✓ Batch counts reset to zero")
+    return jsonify({
+        'success': True,
+        'message': 'All counts reset to zero',
+        'counts': {
+            'small': count_small,
+            'medium': count_medium,
+            'large': count_large,
+            'defective': count_defective,
+            'total': count_total
+        }
+    })
+
 def operate_stopper():
     barrier_gate.angle = BARRIER_RELEASED
     time.sleep(STOPPER_DELAY)
