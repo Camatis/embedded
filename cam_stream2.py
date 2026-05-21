@@ -15,6 +15,7 @@ import asyncio
 import cv2
 import numpy as np
 import threading
+import time
 from flask import Flask, request, jsonify
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from av import VideoFrame
@@ -38,6 +39,7 @@ def setup_event_loop():
     loop = asyncio.new_event_loop()
     loop_thread = threading.Thread(target=run_loop, daemon=True)
     loop_thread.start()
+    time.sleep(0.5)  # Give loop thread time to start
     print("✓ Global asyncio event loop started")
 
 camera = None
@@ -220,6 +222,10 @@ class CameraTrack(VideoStreamTrack):
 @app.route('/offer', methods=['POST'])
 def offer():
     global loop
+    if loop is None:
+        print("❌ Event loop not initialized")
+        return jsonify({'error': 'Server not ready'}), 503
+    
     data = request.get_json()
     if not data or 'sdp' not in data or 'type' not in data:
         return jsonify({'error': 'Missing SDP offer'}), 400
@@ -275,4 +281,5 @@ def home():
 if __name__ == '__main__':
     print("Starting Mango Sorter cam_stream2 on port 8082...")
     print("Access endpoint: http://0.0.0.0:8082/offer")
+    setup_event_loop()
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
