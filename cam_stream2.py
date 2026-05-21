@@ -226,6 +226,10 @@ def offer():
         print("❌ Event loop not initialized")
         return jsonify({'error': 'Server not ready'}), 503
     
+    # Set the global event loop as current for this request thread
+    # so aiortc can find it when creating RTCPeerConnection
+    asyncio.set_event_loop(loop)
+    
     data = request.get_json()
     if not data or 'sdp' not in data or 'type' not in data:
         return jsonify({'error': 'Missing SDP offer'}), 400
