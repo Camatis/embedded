@@ -48,8 +48,8 @@ yolo_model = None
 model_lock = threading.Lock()
 CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
-CAMERA_FPS = 10
-DETECTION_INTERVAL = 4
+CAMERA_FPS = 30
+DETECTION_INTERVAL = 8
 MODEL_PATH = os.environ.get(
     'YOLO_MODEL_PATH',
     os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
@@ -191,7 +191,7 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
 
-                do_detect = (self.frame_count % DETECTION_INTERVAL) == 0
+                do_detect = (self.frame_count % DETECTION_INTERVAL) == 0  # Run YOLO every 8 frames
                 if do_detect:
                     frame, _ = detect_frame(frame)
                 else:
