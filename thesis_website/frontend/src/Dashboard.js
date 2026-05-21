@@ -188,6 +188,77 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
+  const initWebRTCStream = async () => {
+    if (!videoRef.current) return;
+
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+
+    try {
+      setCameraStatus('Initializing WebRTC connection...');
+      setCameraError('');
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+
+      pc.ontrack = (event) => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = event.streams[0];
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        if (state === 'connected' || state === 'completed') {
+          setCameraStatus('WebRTC stream connected');
+          setWebrtcReady(true);
+        } else if (state === 'failed' || state === 'disconnected') {
+          setCameraStatus(`WebRTC connection ${state}`);
+          setWebrtcReady(false);
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const response = await fetch(`${BACKEND_URL}/api/webrtc-offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
+      });
+
+      const answer = await response.json();
+      if (!response.ok) {
+        throw new Error(answer.message || 'WebRTC offer failed');
+      }
+
+      await pc.setRemoteDescription(answer);
+      setCameraStatus('WebRTC stream is live');
+      setWebrtcReady(true);
+    } catch (err) {
+      console.error('WebRTC init error:', err);
+      setCameraError(err.message || 'Unable to start WebRTC stream');
+      setCameraStatus('WebRTC stream failed');
+      setWebrtcReady(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentView === 'dashboard') {
+      initWebRTCStream();
+    }
+  }, [currentView, cameraReloadKey]);
+
+  useEffect(() => {
+    return () => {
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    };
+  }, []);
+
   const stopSessionImmediately = async () => {
     if (!sessionActive && !sessionPaused) return;
     setHardwareAlert('Stopped due to limit or temperature condition.');
@@ -767,13 +838,11 @@ function Dashboard({ user, token, onLogout }) {
   // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
-      // fast UI response
+      setHardwareAlert('Starting new batch (offline-safe)...');
+
       const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
       setSortingStats(initialCounts);
       countsRef.current = initialCounts;
-      setSessionActive(true);
-      setSessionPaused(false);
-      setHardwareAlert('Starting new batch (offline-safe)...');
 
       const clearUrl = `${BACKEND_URL}/api/clear-sensor-data`;
       await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
@@ -798,7 +867,6 @@ function Dashboard({ user, token, onLogout }) {
         const created = await res.json();
         const newId = created._id || created.data?._id || (created.offline && created.data?._id) || null;
         setCurrentSessionId(newId);
-        setHardwareAlert('New batch started');
       } else {
         const errorText = await res.text();
         console.error('Failed to start session', errorText);
@@ -810,14 +878,29 @@ function Dashboard({ user, token, onLogout }) {
       if (!startResult.success) {
         console.error('Hardware start failed:', startResult);
         setHardwareAlert(`Hardware start failed: ${startResult.message}`);
+        setSessionActive(false);
+        setSessionPaused(false);
+        return;
       }
 
-      await controlConveyor('start');
+      const conveyorResult = await controlConveyor('start');
+      if (!conveyorResult.success) {
+        console.error('Conveyor start failed:', conveyorResult);
+        setHardwareAlert(`Conveyor start failed: ${conveyorResult.message}`);
+        setSessionActive(false);
+        setSessionPaused(false);
+        return;
+      }
+
+      setSessionActive(true);
+      setSessionPaused(false);
+      setHardwareAlert('New batch started');
       fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
       setHardwareAlert(`Error starting batch: ${err.message}`);
       setSessionActive(false);
+      setSessionPaused(false);
     }
   };
 
@@ -1069,16 +1152,19 @@ function Dashboard({ user, token, onLogout }) {
                 <h2>Live Camera Feed</h2>
               </div>
               <div className="camera-container">
-                <img
-                  src={`${window.location.protocol}//${window.location.hostname}:8081/mjpeg`}
-                  alt="MJPEG camera stream"
-                  style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px' }}
-                  onError={() => setCameraError('MJPEG stream unavailable. Is cam_stream.py running?')}
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px', backgroundColor: '#000' }}
                 />
               </div>
-              <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
-                Mode: MJPEG
-              </p>
+              <div style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
+                <div>Mode: WebRTC</div>
+                <div>{cameraStatus}</div>
+                {cameraError && <div style={{ color: 'red' }}>{cameraError}</div>}
+              </div>
             </div>
 
             <div className="system-controls">

@@ -85,11 +85,17 @@ def normalize_frame(frame):
 
 
 def draw_detection_boxes(frame, boxes):
-    for x1, y1, x2, y2, conf in boxes:
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"Mango {conf:.2f}"
+    for x1, y1, x2, y2, conf, cls_name in boxes:
+        color = (0, 255, 0)
+        if cls_name:
+            cn = str(cls_name).strip().lower()
+            if 'defect' in cn or 'defective' in cn or 'bad' in cn:
+                color = (0, 0, 255)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label = f"{cls_name or 'Mango'} {conf:.2f}"
         cv2.putText(frame, label, (x1, max(20, y1 - 10)),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return frame
 
 
@@ -113,7 +119,14 @@ def detect_frame(frame):
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     conf = float(box.conf[0])
-                    detections.append((x1, y1, x2, y2, conf))
+                    cls_name = None
+                    try:
+                        if hasattr(box, 'cls') and box.cls is not None:
+                            cls_idx = int(box.cls[0])
+                            cls_name = yolo_model.names.get(cls_idx, str(cls_idx)) if hasattr(yolo_model, 'names') else str(cls_idx)
+                    except Exception:
+                        cls_name = None
+                    detections.append((x1, y1, x2, y2, conf, cls_name))
             last_detection_boxes = detections
             last_detection_count = len(detections)
             print(f"✓ YOLO detections: {last_detection_count}")

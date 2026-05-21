@@ -78,6 +78,8 @@ let enqueueFlushHandle = null;
 const HARDWARE_CONTROL_FILE = '/tmp/mangosort_control.json';
 let hardwareProcess = null;
 let hardwareRunning = false;
+let hardwareStarting = false;
+let hardwareStartPromise = null;
 
 function writeHardwareControlFile(running) {
   try {
@@ -88,8 +90,30 @@ function writeHardwareControlFile(running) {
   }
 }
 
+async function isHardwareServiceAvailable() {
+  try {
+    const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`, {
+      timeout: HARDWARE_READY_INTERVAL_MS
+    });
+    return response.status === 200;
+  } catch (err) {
+    return false;
+  }
+}
+
 async function ensureHardwareProcessRunning() {
   if (hardwareProcess && hardwareProcess.exitCode === null) {
+    return true;
+  }
+
+  if (hardwareStarting && hardwareStartPromise) {
+    const result = await hardwareStartPromise;
+    return result.success;
+  }
+
+  if (await isHardwareServiceAvailable()) {
+    console.log('Detected existing hardware service on port 5000');
+    writeHardwareControlFile(true);
     return true;
   }
 
@@ -122,16 +146,117 @@ async function waitForHardwareReady() {
 
 async function startHardwareProcess() {
   console.log('Hardware start request received');
-  if (hardwareProcess) {
+  if (hardwareProcess && hardwareProcess.exitCode === null) {
     console.log('Hardware process already running');
     return { success: true, message: 'Hardware already running' };
   }
 
-  if (!fs.existsSync(PYTHON_HARDWARE_SCRIPT)) {
-    const message = `Hardware script not found at ${PYTHON_HARDWARE_SCRIPT}`;
-    console.error(message);
-    return { success: false, message };
+  if (hardwareStarting && hardwareStartPromise) {
+    console.log('Hardware start already in progress');
+    return await hardwareStartPromise;
   }
+
+  hardwareStarting = true;
+  hardwareStartPromise = (async () => {
+    try {
+      if (await isHardwareServiceAvailable()) {
+        console.log('Detected existing hardware service on port 5000 before spawning new process');
+        writeHardwareControlFile(true);
+        return { success: true, message: 'Hardware service already running' };
+      }
+
+      if (!fs.existsSync(PYTHON_HARDWARE_SCRIPT)) {
+        const message = `Hardware script not found at ${PYTHON_HARDWARE_SCRIPT}`;
+        console.error(message);
+        return { success: false, message };
+      }
+
+      console.log('Starting servotest hardware controller process...');
+      const pythonCmd = process.env.PYTHON_CMD || 'python3';
+      const embeddedDir = path.resolve(__dirname, '..', '..');
+      console.log('Using Python command:', pythonCmd);
+      console.log('Servotest script path:', PYTHON_HARDWARE_SCRIPT);
+      console.log('Working directory:', embeddedDir);
+
+      const depCheck = spawnSync(pythonCmd, ['-c', 'import board'], {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1'
+        }
+      });
+      if (depCheck.error || depCheck.status !== 0) {
+        const depErr = depCheck.error?.message || `exit code ${depCheck.status}`;
+        const message = `Python dependency missing or invalid Python environment for ${pythonCmd}: ${depErr}`;
+        console.error(message);
+        return { success: false, message };
+      }
+      
+      // Spawn with explicit cwd (so YOLO model is found) and inherited environment
+      hardwareProcess = spawn(pythonCmd, [PYTHON_HARDWARE_SCRIPT], {
+        detached: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: embeddedDir,
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1'
+        }
+      });
+
+      hardwareProcess.on('spawn', () => {
+        console.log(`Hardware process spawned with PID ${hardwareProcess.pid}`);
+      });
+
+      hardwareProcess.on('error', (err) => {
+        console.error('Hardware process error event:', err);
+      });
+
+      hardwareProcess.stdout.on('data', (data) => {
+        console.log(`[Hardware] ${data.toString().trim()}`);
+      });
+
+      hardwareProcess.stderr.on('data', (data) => {
+        console.log(`[Hardware] ${data.toString().trim()}`);
+      });
+
+      hardwareProcess.on('close', (code) => {
+        console.log(`Hardware process exited with code ${code}`);
+        hardwareProcess = null;
+        hardwareRunning = false;
+      });
+
+      const ready = await waitForHardwareReady();
+      if (!ready) {
+        const message = `Hardware process started but not ready within ${HARDWARE_READY_TIMEOUT_MS}ms. It may still be warming up.`;
+        console.warn(message);
+        if (hardwareProcess && hardwareProcess.exitCode !== null) {
+          console.error(`Hardware process exited with code ${hardwareProcess.exitCode}`);
+          hardwareProcess = null;
+          return { success: false, message: `Hardware failed to start: exited with code ${hardwareProcess.exitCode}` };
+        }
+        writeHardwareControlFile(true);
+        hardwareRunning = true;
+        return { success: true, starting: true, message };
+      }
+
+      writeHardwareControlFile(true);
+      hardwareRunning = true;
+      return { success: true, message: `Servotest started and ready at ${PYTHON_API_BASE_URL}` };
+    } catch (err) {
+      console.error('Failed to start hardware process:', err);
+      if (hardwareProcess) {
+        hardwareProcess.kill('SIGTERM');
+        hardwareProcess = null;
+      }
+      return { success: false, message: err.message };
+    } finally {
+      hardwareStarting = false;
+      hardwareStartPromise = null;
+    }
+  })();
+
+  return await hardwareStartPromise;
+}
 
   try {
     console.log('Starting servotest hardware controller process...');

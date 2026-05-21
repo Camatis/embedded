@@ -91,7 +91,10 @@ def normalize_frame(frame):
 
 
 def draw_bounding_boxes(frame, yolo_model, do_detect=True):
-    """Run YOLO inference and draw bounding boxes on the frame."""
+    """Run YOLO inference and draw bounding boxes on the frame.
+
+    Colors: green = mango/good, red = defective.
+    """
     global last_detection_count, last_detection_boxes
     frame = normalize_frame(frame)
     if frame is None:
@@ -101,12 +104,22 @@ def draw_bounding_boxes(frame, yolo_model, do_detect=True):
         last_detection_count = 0
         return frame
 
+    # Helper to pick color based on class name
+    def box_color_for_class(class_name):
+        if not class_name:
+            return (0, 255, 0)
+        cn = str(class_name).strip().lower()
+        if 'defect' in cn or 'defective' in cn or 'bad' in cn:
+            return (0, 0, 255)
+        return (0, 255, 0)
+
     if not do_detect:
-        for x1, y1, x2, y2, conf in last_detection_boxes:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"Mango {conf:.2f}"
+        for x1, y1, x2, y2, conf, cls_name in last_detection_boxes:
+            color = box_color_for_class(cls_name)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            label = f"{cls_name or 'Mango'} {conf:.2f}"
             cv2.putText(frame, label, (x1, max(20, y1 - 10)),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         return frame
 
     try:
@@ -115,7 +128,7 @@ def draw_bounding_boxes(frame, yolo_model, do_detect=True):
 
         if results and len(results) > 0:
             result = results[0]
-            boxes = result.boxes
+            boxes = getattr(result, 'boxes', None)
             current_count = int(len(boxes)) if boxes is not None else 0
             if current_count != last_detection_count:
                 print(f"✓ YOLO detections: {current_count}")
@@ -124,17 +137,24 @@ def draw_bounding_boxes(frame, yolo_model, do_detect=True):
             last_detection_boxes = []
             if boxes is not None and current_count > 0:
                 for box in boxes:
+                    # get coordinates, confidence and class if available
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     conf = float(box.conf[0])
-                    last_detection_boxes.append((x1, y1, x2, y2, conf))
+                    cls_name = None
+                    try:
+                        if hasattr(box, 'cls') and box.cls is not None:
+                            cls_idx = int(box.cls[0])
+                            cls_name = yolo_model.names.get(cls_idx, str(cls_idx)) if hasattr(yolo_model, 'names') else str(cls_idx)
+                    except Exception:
+                        cls_name = None
 
-                    # Draw bounding box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    last_detection_boxes.append((x1, y1, x2, y2, conf, cls_name))
 
-                    # Draw label with confidence
-                    label = f"Mango {conf:.2f}"
+                    color = box_color_for_class(cls_name)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    label = f"{cls_name or 'Mango'} {conf:.2f}"
                     cv2.putText(frame, label, (x1, max(20, y1 - 10)),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         else:
             last_detection_count = 0
             last_detection_boxes = []
