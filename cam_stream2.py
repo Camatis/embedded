@@ -25,6 +25,21 @@ from ultralytics import YOLO
 app = Flask(__name__)
 pcs = set()
 
+# Global event loop for WebRTC connections
+loop = None
+loop_thread = None
+
+def setup_event_loop():
+    global loop, loop_thread
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+    
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=run_loop, daemon=True)
+    loop_thread.start()
+    print("✓ Global asyncio event loop started")
+
 camera = None
 camera_lock = threading.Lock()
 yolo_model = None
@@ -204,12 +219,13 @@ class CameraTrack(VideoStreamTrack):
 
 @app.route('/offer', methods=['POST'])
 def offer():
+    global loop
     data = request.get_json()
     if not data or 'sdp' not in data or 'type' not in data:
         return jsonify({'error': 'Missing SDP offer'}), 400
 
     try:
-        offer = RTCSessionDescription(sdp=data['sdp'], type=data['type'])
+        offer_desc = RTCSessionDescription(sdp=data['sdp'], type=data['type'])
         pc = RTCPeerConnection()
         pcs.add(pc)
 
@@ -217,23 +233,26 @@ def offer():
         def on_iceconnectionstatechange():
             print('ICE state:', pc.iceConnectionState)
             if pc.iceConnectionState == 'failed':
-                asyncio.ensure_future(pc.close())
+                asyncio.run_coroutine_threadsafe(pc.close(), loop)
 
         camera_track = CameraTrack(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS)
         pc.addTrack(camera_track)
 
         async def run():
-            await pc.setRemoteDescription(offer)
+            await pc.setRemoteDescription(offer_desc)
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
+            return pc.localDescription
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run())
+        # Schedule the async work on the global event loop and wait for result
+        future = asyncio.run_coroutine_threadsafe(run(), loop)
+        local_desc = future.result(timeout=5)
 
-        return jsonify({'sdp': pc.localDescription.sdp, 'type': pc.localDescription.type})
+        return jsonify({'sdp': local_desc.sdp, 'type': local_desc.type})
     except Exception as e:
         print(f"❌ WebRTC offer error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
