@@ -80,6 +80,7 @@ let hardwareProcess = null;
 let hardwareRunning = false;
 let hardwareStarting = false;
 let hardwareStartPromise = null;
+let countsResetTimestamp = null;  // Track when counts were cleared
 
 function writeHardwareControlFile(running) {
   try {
@@ -1060,6 +1061,11 @@ app.get('/api/hardware/sensors', async (req, res) => {
         await ensureHardwareProcessRunning();
         const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`);
         const data = response.data || {};
+        
+        // If counts were recently cleared, suppress hardware counts for 2 seconds to allow fresh sync
+        const countsGracePeriodMs = 2000;
+        const suppress = countsResetTimestamp && (Date.now() - countsResetTimestamp) < countsGracePeriodMs;
+        
         res.json({
             trigger: data.sensors?.trigger ?? false,
             medium: data.sensors?.medium ?? false,
@@ -1070,7 +1076,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
             timestamp: Date.now(),
             online: true,
             state: data.state || 'unknown',
-            counts: data.counts || {}
+            counts: suppress ? {} : (data.counts || {})  // Suppress stale counts during grace period
         });
     } catch (error) {
         console.error('Error getting sensor data:', error?.message || error);
@@ -1129,6 +1135,7 @@ app.get('/api/sensor-data', (req, res) => {
 // Clears sensor data (called when batch stops)
 app.post('/api/clear-sensor-data', (req, res) => {
   lastSensorData = null;
+  countsResetTimestamp = Date.now();  // Mark counts as cleared
   res.json({ success: true, message: 'Sensor data cleared' });
 });
 
