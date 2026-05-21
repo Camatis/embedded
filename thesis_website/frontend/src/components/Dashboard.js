@@ -97,6 +97,7 @@ function Dashboard({ user, token, onLogout }) {
   //track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
   const lastDetectedRef = useRef({ size: null, timestamp: null });
+  const resetInProgressRef = useRef(false);
 
   const controlGate = async (gate, action) => {
     try {
@@ -387,6 +388,12 @@ function Dashboard({ user, token, onLogout }) {
         : null;
 
       if (countsSource) {
+        // Skip syncing counts if we just started a new batch (grace period for reset to stabilize)
+        if (resetInProgressRef.current) {
+          console.log('⏭️  [SYNC] Skipping count sync during reset grace period');
+          return;
+        }
+
         const needsSync = countsSource.small !== countsRef.current.small
           || countsSource.medium !== countsRef.current.medium
           || countsSource.large !== countsRef.current.large
@@ -932,6 +939,12 @@ function Dashboard({ user, token, onLogout }) {
   // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
+      // Set grace period flag to prevent stale counts from syncing back
+      resetInProgressRef.current = true;
+      setTimeout(() => {
+        resetInProgressRef.current = false;
+      }, 1000);
+
       const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
       setSortingStats(initialCounts);
       countsRef.current = initialCounts;
