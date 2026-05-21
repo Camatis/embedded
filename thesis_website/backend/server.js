@@ -1192,7 +1192,8 @@ app.get('/api/rpi-cpu-temp', async (req, res) => {
 
 // Proxy the WebRTC offer for RPi cam stream
 app.post('/api/webrtc-offer', async (req, res) => {
-  const remoteUrl = process.env.RPI_WEBRTC_URL || 'http://127.0.0.1:8081/offer';
+  const remoteUrl = process.env.RPI_WEBRTC_URL || 'http://127.0.0.1:8082/offer';
+  console.log('Forwarding WebRTC offer to:', remoteUrl);
   try {
     const useFetch = typeof fetch === 'function' ? fetch : require('node-fetch');
     const response = await useFetch(remoteUrl, {
