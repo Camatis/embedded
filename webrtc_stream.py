@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""WebRTC camera stream (fast, non-blocking).
+"""WebRTC camera stream with shared YOLO detector.
 
-Captures frames and streams them via WebRTC to browser without YOLO blocking.
-YOLO detections are handled by yolo_detector.py in a separate process.
+Captures frames and streams them via WebRTC to browser.
+YOLO detections are handled by yolo_detector_shared.py (shared with servotest).
 
 Usage:
-  pip install flask aiortc opencv-python av picamera2
+  pip install flask aiortc opencv-python av picamera2 ultralytics
   python webrtc_stream.py
 
 Then from browser:
@@ -53,15 +53,10 @@ CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 30
 
-MODEL_PATH = os.environ.get(
-    'YOLO_MODEL_PATH',
-    os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
-)
-
-# Detection queue communication with yolo_detector process
-# These will be initialized in __main__
+# Shared YOLO detector queues (will be set by main)
 detection_queue = None
 result_queue = None
+WEBRTC_CLIENT_ID = 'webrtc_stream'
 
 # Cache latest detections
 last_detection_boxes = []
@@ -119,92 +114,7 @@ def draw_detection_boxes(frame, boxes):
     return frame
 
 
-def yolo_detector_worker(detection_queue, result_queue, model_path):
-    """YOLO detection worker (runs in separate process).
-    
-    Continuously reads frames from detection_queue, runs YOLO inference,
-    and puts results in result_queue.
-    """
-    from ultralytics import YOLO
-    
-    print("🔍 YOLO detector process started")
-    
-    # Load YOLO model
-    try:
-        if not os.path.exists(model_path):
-            print(f"⚠ YOLO model not found at {model_path}")
-            return
-        yolo_model = YOLO(model_path)
-        print(f"✓ YOLO model loaded from {model_path}")
-    except Exception as e:
-        print(f"⚠ Failed to load YOLO model: {e}")
-        return
-    
-    frame_count = 0
-    last_result_time = time.time()
-    
-    while True:
-        try:
-            # Wait for frame (timeout to stay responsive to shutdown)
-            try:
-                frame_bytes, frame_id = detection_queue.get(timeout=1)
-            except:
-                continue
-            
-            # Decode frame
-            try:
-                nparr = np.frombuffer(frame_bytes, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            except Exception as e:
-                print(f"⚠ Frame decode error: {e}")
-                continue
-            
-            # Run detection
-            try:
-                results = yolo_model(frame, verbose=False, conf=0.5)
-                detections = []
-                
-                if results and len(results) > 0:
-                    result = results[0]
-                    boxes = result.boxes
-                    if boxes is not None and len(boxes) > 0:
-                        for box in boxes:
-                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            conf = float(box.conf[0])
-                            cls_name = None
-                            try:
-                                if hasattr(box, 'cls') and box.cls is not None:
-                                    cls_idx = int(box.cls[0])
-                                    if hasattr(yolo_model, 'names'):
-                                        cls_name = yolo_model.names.get(cls_idx, str(cls_idx))
-                                    else:
-                                        cls_name = str(cls_idx)
-                            except Exception:
-                                pass
-                            detections.append((x1, y1, x2, y2, conf, cls_name))
-                
-                # Put results in queue (non-blocking)
-                try:
-                    result_queue.put((detections, frame_id), block=False)
-                    frame_count += 1
-                    
-                    elapsed = time.time() - last_result_time
-                    if elapsed >= 10:  # Log every 10 seconds
-                        print(f"🎯 YOLO: {frame_count} frames processed")
-                        frame_count = 0
-                        last_result_time = time.time()
-                except:
-                    # Queue full, drop result
-                    pass
-            except Exception as e:
-                print(f"⚠ YOLO inference error: {e}")
-        
-        except KeyboardInterrupt:
-            print("🛑 YOLO detector stopping...")
-            break
-        except Exception as e:
-            print(f"⚠ Detector error: {e}")
-            time.sleep(0.1)
+
 
 
 class CameraTrack(VideoStreamTrack):
@@ -238,27 +148,25 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
                 
-                # Send frame to YOLO detector every 4 frames (more frequent for less lag)
+                # Send frame to shared YOLO detector every 4 frames
                 frame_id = self.frame_count
                 if (self.frame_count % 4) == 0 and detection_queue is not None:
                     try:
-                        # Don't wait for response - just queue the frame
-                        # Encode frame as bytes for multiprocessing
                         frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
-                        detection_queue.put((frame_bytes, frame_id), block=False)
+                        detection_queue.put((frame_bytes, frame_id, WEBRTC_CLIENT_ID), block=False)
                     except Exception as e:
-                        # Queue full or error - just skip, no blocking
+                        # Queue full or error - skip, no blocking
                         pass
                 
-                # Check for results from YOLO detector (drain queue to get freshest)
+                # Check for results from shared YOLO detector (drain queue to get freshest)
                 global last_detection_boxes, last_frame_id
                 if result_queue is not None:
                     try:
-                        # Drain entire queue to get the latest detection result
                         while True:
-                            boxes, result_frame_id = result_queue.get(block=False)
-                            if result_frame_id > last_frame_id:
-                                last_detection_boxes = boxes
+                            detections, result_frame_id, client_id = result_queue.get(block=False)
+                            # Only apply results from THIS client (ignore servotest/cam_stream2 results)
+                            if client_id == WEBRTC_CLIENT_ID and result_frame_id > last_frame_id:
+                                last_detection_boxes = detections
                                 last_frame_id = result_frame_id
                     except:
                         # No new results in queue
@@ -351,39 +259,18 @@ def home():
 
 
 if __name__ == '__main__':
-    # Create shared queues for detector process (larger size = less lag)
-    # Increased from 5 to 10 to handle more frames in flight
-    detection_queue = multiprocessing.Queue(maxsize=10)
-    result_queue = multiprocessing.Queue(maxsize=10)
-    
-    # Verify model exists
-    if not os.path.exists(MODEL_PATH):
-        print(f"⚠️  WARNING: YOLO model not found at {MODEL_PATH}")
-        print(f"  Detections will be disabled")
-    else:
-        print(f"✓ YOLO model found at {MODEL_PATH}")
-    
-    # Start YOLO detector process
-    print("🔍 Starting YOLO detector process...")
-    detector_process = multiprocessing.Process(
-        target=yolo_detector_worker,
-        args=(detection_queue, result_queue, MODEL_PATH),
-        daemon=True
-    )
-    detector_process.start()
-    print(f"✓ YOLO detector started (PID: {detector_process.pid})")
+    # Import and start shared YOLO detector
+    try:
+        from yolo_detector_shared import start_shared_detector
+        print("Starting shared YOLO detector...")
+        detection_queue, result_queue = start_shared_detector()
+        print("✓ Shared YOLO detector initialized")
+    except Exception as e:
+        print(f"⚠ Failed to start shared YOLO detector: {e}")
+        print("  webrtc_stream will run without detection")
     
     print("Starting Mango Sorter WebRTC stream on port 8082...")
     print("Access endpoint: http://0.0.0.0:8082/offer")
     
     setup_event_loop()
-    try:
-        app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
-    except KeyboardInterrupt:
-        print("Shutting down...")
-    finally:
-        print("Stopping YOLO detector...")
-        detector_process.terminate()
-        detector_process.join(timeout=5)
-        if detector_process.is_alive():
-            detector_process.kill()
+    app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
