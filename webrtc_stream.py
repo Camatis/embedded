@@ -53,6 +53,11 @@ CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 30
 
+MODEL_PATH = os.environ.get(
+    'YOLO_MODEL_PATH',
+    os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
+)
+
 # Detection queue communication with yolo_detector process
 # These will be initialized in __main__
 detection_queue = None
@@ -114,7 +119,7 @@ def draw_detection_boxes(frame, boxes):
     return frame
 
 
-def yolo_detector_worker(detection_queue, result_queue):
+def yolo_detector_worker(detection_queue, result_queue, model_path):
     """YOLO detection worker (runs in separate process).
     
     Continuously reads frames from detection_queue, runs YOLO inference,
@@ -126,11 +131,11 @@ def yolo_detector_worker(detection_queue, result_queue):
     
     # Load YOLO model
     try:
-        if not os.path.exists(MODEL_PATH):
-            print(f"⚠ YOLO model not found at {MODEL_PATH}")
+        if not os.path.exists(model_path):
+            print(f"⚠ YOLO model not found at {model_path}")
             return
-        yolo_model = YOLO(MODEL_PATH)
-        print(f"✓ YOLO model loaded from {MODEL_PATH}")
+        yolo_model = YOLO(model_path)
+        print(f"✓ YOLO model loaded from {model_path}")
     except Exception as e:
         print(f"⚠ Failed to load YOLO model: {e}")
         return
@@ -349,11 +354,18 @@ if __name__ == '__main__':
     detection_queue = multiprocessing.Queue(maxsize=5)
     result_queue = multiprocessing.Queue(maxsize=5)
     
+    # Verify model exists
+    if not os.path.exists(MODEL_PATH):
+        print(f"⚠️  WARNING: YOLO model not found at {MODEL_PATH}")
+        print(f"  Detections will be disabled")
+    else:
+        print(f"✓ YOLO model found at {MODEL_PATH}")
+    
     # Start YOLO detector process
     print("🔍 Starting YOLO detector process...")
     detector_process = multiprocessing.Process(
         target=yolo_detector_worker,
-        args=(detection_queue, result_queue),
+        args=(detection_queue, result_queue, MODEL_PATH),
         daemon=True
     )
     detector_process.start()
