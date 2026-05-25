@@ -16,12 +16,12 @@ import cv2
 import numpy as np
 import threading
 import time
+import multiprocessing
 from flask import Flask, request, jsonify
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from av import VideoFrame
 from picamera2 import Picamera2
 import os
-from ultralytics import YOLO
 
 app = Flask(__name__)
 pcs = set()
@@ -44,19 +44,20 @@ def setup_event_loop():
 
 camera = None
 camera_lock = threading.Lock()
-yolo_model = None
-model_lock = threading.Lock()
+
+# Shared YOLO detector queues (will be set by main)
+detection_queue = None
+result_queue = None
+CAM_STREAM_CLIENT_ID = 'cam_stream2'
+
 CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 30
-DETECTION_INTERVAL = 16  # Reduced from 8 to cut YOLO processing frequency in half
-MODEL_PATH = os.environ.get(
-    'YOLO_MODEL_PATH',
-    os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
-)
+DETECTION_INTERVAL = 4  # Send frames more frequently (every 4 frames = 7.5 FPS at 30 FPS)
 
 last_detection_count = 0
 last_detection_boxes = []
+last_frame_id = -1
 
 
 def init_camera():
@@ -70,23 +71,6 @@ def init_camera():
     camera.start()
     print("✓ Shared Picamera2 instance started")
     return camera
-
-
-def init_yolo_model():
-    global yolo_model
-    if yolo_model is not None:
-        return yolo_model
-
-    try:
-        if not os.path.exists(MODEL_PATH):
-            print(f"⚠ YOLO model not found at {MODEL_PATH}, skipping detection")
-            return None
-        yolo_model = YOLO(MODEL_PATH)
-        print(f"✓ YOLO model loaded from {MODEL_PATH}")
-        return yolo_model
-    except Exception as e:
-        print(f"⚠ Failed to load YOLO model: {e}")
-        return None
 
 
 def normalize_frame(frame):
@@ -103,11 +87,12 @@ def normalize_frame(frame):
 
 def draw_detection_boxes(frame, boxes):
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        color = (0, 255, 0)
+        color = (0, 255, 0)  # Default: GREEN for good mangoes
         if cls_name:
             cn = str(cls_name).strip().lower()
-            if 'defect' in cn or 'defective' in cn or 'bad' in cn:
-                color = (0, 0, 255)
+            # Mark as RED only if it's explicitly defective (ignore "not defective")
+            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
+                color = (0, 0, 255)  # RED for defective mangoes
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{cls_name or 'Mango'} {conf:.2f}"
@@ -116,48 +101,41 @@ def draw_detection_boxes(frame, boxes):
     return frame
 
 
-def detect_frame(frame):
-    global last_detection_count, last_detection_boxes
+def detect_frame_async(frame, frame_id):
+    """Send frame to shared YOLO detector (non-blocking).
+    
+    Returns last cached detections immediately while new ones process in background.
+    """
+    global last_detection_boxes, last_frame_id, last_detection_count
     frame = normalize_frame(frame)
-    if frame is None or yolo_model is None:
-        last_detection_boxes = []
-        last_detection_count = 0
+    if frame is None or detection_queue is None:
         return frame, []
 
     try:
-        with model_lock:
-            results = yolo_model(frame, verbose=False, conf=0.5)
-
-        if results and len(results) > 0:
-            result = results[0]
-            boxes = result.boxes
-            detections = []
-            if boxes is not None and len(boxes) > 0:
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    conf = float(box.conf[0])
-                    cls_name = None
-                    try:
-                        if hasattr(box, 'cls') and box.cls is not None:
-                            cls_idx = int(box.cls[0])
-                            cls_name = yolo_model.names.get(cls_idx, str(cls_idx)) if hasattr(yolo_model, 'names') else str(cls_idx)
-                    except Exception:
-                        cls_name = None
-                    detections.append((x1, y1, x2, y2, conf, cls_name))
-            last_detection_boxes = detections
-            last_detection_count = len(detections)
-            print(f"✓ YOLO detections: {last_detection_count}")
-            frame = draw_detection_boxes(frame, last_detection_boxes)
-            return frame, last_detection_boxes
-
-        last_detection_boxes = []
-        last_detection_count = 0
-        return frame, []
-    except Exception as e:
-        print(f"⚠ YOLO inference error: {e}")
-        last_detection_boxes = []
-        last_detection_count = 0
-        return frame, []
+        # Send frame to shared detector
+        frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+        detection_queue.put((frame_bytes, frame_id, CAM_STREAM_CLIENT_ID), block=False)
+    except:
+        # Queue full, skip this frame
+        pass
+    
+    # Drain result queue to get the freshest detections
+    if result_queue is not None:
+        try:
+            while True:
+                detections, result_frame_id, client_id = result_queue.get(block=False)
+                # Only apply results from THIS client (ignore servotest results)
+                if client_id == CAM_STREAM_CLIENT_ID and result_frame_id > last_frame_id:
+                    last_detection_boxes = detections
+                    last_frame_id = result_frame_id
+                    last_detection_count = len(detections)
+        except:
+            # No results in queue
+            pass
+    
+    # Draw the latest cached detections
+    frame = draw_detection_boxes(frame, last_detection_boxes)
+    return frame, last_detection_boxes
 
 
 class CameraTrack(VideoStreamTrack):
@@ -171,7 +149,6 @@ class CameraTrack(VideoStreamTrack):
 
         try:
             init_camera()
-            init_yolo_model()
             self.camera_available = True
             print("✓ Camera initialized for WebRTC via shared Picamera2")
         except Exception as e:
@@ -191,9 +168,10 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
 
-                do_detect = (self.frame_count % DETECTION_INTERVAL) == 0  # Run YOLO every 8 frames
-                if do_detect:
-                    frame, _ = detect_frame(frame)
+                frame_id = self.frame_count
+                do_detect = (self.frame_count % DETECTION_INTERVAL) == 0
+                if do_detect and detection_queue is not None:
+                    frame, _ = detect_frame_async(frame, frame_id)
                 else:
                     frame = draw_detection_boxes(frame, last_detection_boxes)
 
@@ -269,10 +247,11 @@ def offer():
 @app.route('/status')
 def status():
     return jsonify({
-        'model_loaded': yolo_model is not None,
-        'model_path': MODEL_PATH,
+        'stream_running': True,
         'last_detection_count': last_detection_count,
         'resolution': f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}",
+        'fps': CAMERA_FPS,
+        'detection_mode': 'shared_process',
         'detection_interval': DETECTION_INTERVAL,
     })
 
@@ -283,6 +262,16 @@ def home():
 
 
 if __name__ == '__main__':
+    # Import and start shared YOLO detector
+    try:
+        from yolo_detector_shared import start_shared_detector
+        print("Starting shared YOLO detector...")
+        detection_queue, result_queue = start_shared_detector()
+        print("✓ Shared YOLO detector initialized")
+    except Exception as e:
+        print(f"⚠ Failed to start shared YOLO detector: {e}")
+        print("  cam_stream2 will run without detection")
+    
     print("Starting Mango Sorter cam_stream2 on port 8082...")
     print("Access endpoint: http://0.0.0.0:8082/offer")
     setup_event_loop()

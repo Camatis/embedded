@@ -3,8 +3,10 @@ import time
 import board
 import busio
 import threading 
-import subprocess 
-from ultralytics import YOLO
+import subprocess
+import multiprocessing
+import cv2
+import numpy as np
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
 from flask import Flask, jsonify, request
@@ -97,9 +99,12 @@ medium_gate.angle = GATE_CLOSED
 large_gate.angle = GATE_CLOSED
 time.sleep(1)
 
-# --- AI Setup ---
-print("Loading YOLO AI Brain...")
-model = YOLO("final_weights.pt")
+# --- Shared YOLO Detector (will be initialized in main) ---
+detection_queue = None
+result_queue = None
+SERVOTEST_CLIENT_ID = 'servotest'
+last_detection_result = None
+detection_result_lock = threading.Lock()
 
 # ==========================================
 # 2. TIMING VARIABLES 
@@ -365,17 +370,52 @@ def autonomous_sorting_loop():
                 try:
                     subprocess.run(["rpicam-jpeg", "-o", "current_mango.jpg", "-t", "1", "--nopreview"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
                     
-                    # 2. Run the AI Prediction directly on the saved photo
-                    print("🧠 AI Analyzing image...")
-                    results = model.predict(source="current_mango.jpg", conf=0.5, verbose=False)
-                    
-                    # Check the results. If it finds even one "Defective" bounding box, flag it.
-                    for r in results:
-                        for c in r.boxes.cls:
-                            class_name = model.names[int(c)] 
-                            if class_name == "Defective":
-                                is_defective = True
-                                break
+                    # 2. Send photo to shared YOLO detector for analysis
+                    if detection_queue is not None:
+                        print("🧠 AI Analyzing image via shared detector...")
+                        try:
+                            with open("current_mango.jpg", "rb") as f:
+                                frame_bytes = f.read()
+                            
+                            # Send to shared detector (frame_id doesn't matter, just use counter)
+                            frame_id = time.time()
+                            detection_queue.put((frame_bytes, frame_id, SERVOTEST_CLIENT_ID), block=False)
+                            
+                            # Wait briefly for results from shared detector
+                            # Check queue with timeout to avoid blocking
+                            result_received = False
+                            for _ in range(50):  # Wait up to 5 seconds (50 * 0.1)
+                                try:
+                                    while True:
+                                        detections, result_frame_id, client_id = result_queue.get(block=False)
+                                        if client_id == SERVOTEST_CLIENT_ID:
+                                            # Found our result
+                                            with detection_result_lock:
+                                                last_detection_result = detections
+                                            result_received = True
+                                            break
+                                except:
+                                    pass
+                                
+                                if result_received:
+                                    break
+                                time.sleep(0.1)
+                            
+                            # Check results
+                            with detection_result_lock:
+                                if last_detection_result is not None:
+                                    for x1, y1, x2, y2, conf, cls_name in last_detection_result:
+                                        if cls_name:
+                                            cn = str(cls_name).strip().lower()
+                                            # Check if explicitly defective (NOT "not defective")
+                                            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn):
+                                                is_defective = True
+                                                break
+                        except Exception as e:
+                            print(f"⚠️ Shared detector error: {e}")
+                    else:
+                        print("⚠️ Shared YOLO detector not available")
+                        
                 except subprocess.TimeoutExpired:
                     print(f"⚠️ Camera timeout: rpicam-jpeg took too long. Assuming mango is Good.")
                 except Exception as e:
@@ -441,6 +481,16 @@ def autonomous_sorting_loop():
             import traceback
             traceback.print_exc()
             time.sleep(1)  # Prevent spam if error keeps happening
+
+# Initialize shared YOLO detector
+try:
+    from yolo_detector_shared import start_shared_detector
+    print("🔍 Initializing shared YOLO detector...")
+    detection_queue, result_queue = start_shared_detector()
+    print("✓ Shared YOLO detector initialized")
+except Exception as e:
+    print(f"⚠️ Failed to start shared YOLO detector: {e}")
+    print("⚠️  servotest will attempt sorting without defect detection")
 
 # Start sorting loop in background thread
 sorting_thread = threading.Thread(target=autonomous_sorting_loop)

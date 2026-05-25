@@ -104,9 +104,9 @@ def draw_detection_boxes(frame, boxes):
         color = (0, 255, 0)  # Default: green for good mangoes
         if cls_name:
             cn = str(cls_name).strip().lower()
-            # Check if this is a defective mango
-            if 'defect' in cn or 'bad' in cn or 'reject' in cn or 'damaged' in cn:
-                color = (0, 0, 255)  # Red for defective
+            # Mark as RED only if it's explicitly defective (ignore "not defective")
+            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
+                color = (0, 0, 255)  # Red for defective mangoes
         
         # Draw rectangle
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
