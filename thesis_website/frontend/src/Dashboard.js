@@ -94,6 +94,57 @@ function Dashboard({ user, token, onLogout }) {
   const [passwordMessage, setPasswordMessage] = useState('');
   //track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
+  const autoSaveIntervalRef = useRef(null);
+
+  // Auto-save counts to database every 30 seconds during active batch
+  const startAutoSave = (sessionId) => {
+    if (autoSaveIntervalRef.current) clearInterval(autoSaveIntervalRef.current);
+    
+    autoSaveIntervalRef.current = setInterval(async () => {
+      if (!sessionId || !sessionActive) return;
+      
+      try {
+        const currentCounts = countsRef.current;
+        console.log('💾 Auto-saving batch counts:', currentCounts);
+        
+        const res = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            counts: {
+              small: currentCounts.small,
+              medium: currentCounts.medium,
+              large: currentCounts.large,
+              defective: currentCounts.defective
+            },
+            quality_stats: {
+              non_defective: currentCounts.small + currentCounts.medium + currentCounts.large,
+              defective: currentCounts.defective,
+              total: currentCounts.total
+            }
+          })
+        });
+        
+        if (!res.ok) {
+          console.warn('Auto-save failed with status:', res.status);
+        } else {
+          console.log('✅ Auto-save successful');
+        }
+      } catch (err) {
+        console.error('Auto-save error:', err);
+      }
+    }, 30000); // Save every 30 seconds
+  };
+
+  const stopAutoSave = () => {
+    if (autoSaveIntervalRef.current) {
+      clearInterval(autoSaveIntervalRef.current);
+      autoSaveIntervalRef.current = null;
+    }
+  };
 
   const controlGate = async (gate, action) => {
     try {
@@ -867,6 +918,8 @@ function Dashboard({ user, token, onLogout }) {
         const created = await res.json();
         const newId = created._id || created.data?._id || (created.offline && created.data?._id) || null;
         setCurrentSessionId(newId);
+        // Start auto-saving counts every 30 seconds
+        startAutoSave(newId);
       } else {
         const errorText = await res.text();
         console.error('Failed to start session', errorText);
@@ -880,6 +933,7 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert(`Hardware start failed: ${startResult.message}`);
         setSessionActive(false);
         setSessionPaused(false);
+        stopAutoSave();
         return;
       }
 
@@ -889,6 +943,7 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert(`Conveyor start failed: ${conveyorResult.message}`);
         setSessionActive(false);
         setSessionPaused(false);
+        stopAutoSave();
         return;
       }
 
@@ -901,6 +956,7 @@ function Dashboard({ user, token, onLogout }) {
       setHardwareAlert(`Error starting batch: ${err.message}`);
       setSessionActive(false);
       setSessionPaused(false);
+      stopAutoSave();
     }
   };
 
@@ -928,13 +984,73 @@ function Dashboard({ user, token, onLogout }) {
   };
 
   const endBatch = async () => {
+    // Retry function with exponential backoff
+    const saveBatchWithRetry = async (sessionId, data, maxRetries = 3) => {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`📤 Attempt ${attempt}/${maxRetries}: Saving batch data...`);
+          const res = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}`, {
+            method: 'PUT',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(data)
+          });
+
+          if (!res.ok) {
+            const errorText = await res.text();
+            console.warn(`Attempt ${attempt} failed with status ${res.status}: ${errorText}`);
+            
+            if (attempt < maxRetries) {
+              const backoffMs = Math.pow(2, attempt) * 500; // Exponential backoff: 1s, 2s, 4s
+              console.log(`Retrying in ${backoffMs}ms...`);
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              continue;
+            }
+            return { success: false, message: `Server error: ${res.status}` };
+          }
+
+          const responseData = await res.json();
+          
+          // Verify the data was actually saved
+          if (responseData.counts && responseData.timestamps?.end_time) {
+            console.log('✅ Batch data verified and saved:', responseData);
+            return { success: true, data: responseData };
+          } else {
+            console.warn('Response received but data not verified:', responseData);
+            if (attempt < maxRetries) {
+              const backoffMs = Math.pow(2, attempt) * 500;
+              console.log(`Retrying in ${backoffMs}ms...`);
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+              continue;
+            }
+            return { success: false, message: 'Data not properly saved' };
+          }
+        } catch (err) {
+          console.error(`Attempt ${attempt} error:`, err);
+          if (attempt < maxRetries) {
+            const backoffMs = Math.pow(2, attempt) * 500;
+            console.log(`Retrying in ${backoffMs}ms...`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          } else {
+            return { success: false, message: err.message };
+          }
+        }
+      }
+      return { success: false, message: 'Max retries exceeded' };
+    };
+
     try {
       if (!currentSessionId) {
         setHardwareAlert('No batch to stop');
+        stopAutoSave();
         return;
       }
 
-      // Stop the belt immediately first.
+      setHardwareAlert('Stopping batch and saving data...');
+
+      // Stop the belt immediately first
       try {
         await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
           method: 'POST',
@@ -946,51 +1062,56 @@ function Dashboard({ user, token, onLogout }) {
       }
       await controlConveyor('stop');
 
-      const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
-      const res = await fetch(apiUrl, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+      // Save final batch data with retry logic
+      const batchData = {
+        counts: {
+          small: countsRef.current.small,
+          medium: countsRef.current.medium,
+          large: countsRef.current.large,
+          defective: countsRef.current.defective
         },
-        body: JSON.stringify({
-          counts: {
-            small: countsRef.current.small,
-            medium: countsRef.current.medium,
-            large: countsRef.current.large,
-            defective: countsRef.current.defective
-          },
-          quality_stats: {
-            non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
-            defective: countsRef.current.defective,
-            total: countsRef.current.total
-          },
-          timestamps: { end_time: new Date() }
-        })
-      });
-      if (res.ok) {
-        // Stop the hardware controller program after the belt has been stopped.
-        try {
-          const stopResult = await stopHardware();
-          if (!stopResult.success) {
-            console.error('Hardware stop failed:', stopResult);
-            setHardwareAlert(`Hardware stop failed: ${stopResult.message}`);
-          }
-        } catch (err) {
-          console.error('Error stopping sorting process:', err);
-        }
-        
+        quality_stats: {
+          non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
+          defective: countsRef.current.defective,
+          total: countsRef.current.total
+        },
+        timestamps: { end_time: new Date() }
+      };
+
+      const saveResult = await saveBatchWithRetry(currentSessionId, batchData);
+
+      if (!saveResult.success) {
+        console.error('❌ Failed to save batch after retries:', saveResult.message);
+        setHardwareAlert(`⚠️ Batch ended but DATA SAVE FAILED: ${saveResult.message}. Please check batch history.`);
+        stopAutoSave();
         setSessionActive(false);
         setSessionPaused(false);
-        setCurrentSessionId(null);
-        setHardwareAlert('Batch stopped and finalized');
+        // Don't clear sessionId yet - let user retry
         setTimeout(() => { fetchSessions(); }, 500);
-      } else {
-
-        console.error('Failed to end batch');
+        return;
       }
+
+      // Stop hardware after successful save
+      try {
+        const stopResult = await stopHardware();
+        if (!stopResult.success) {
+          console.error('Hardware stop failed:', stopResult);
+          setHardwareAlert(`Batch saved but hardware stop failed: ${stopResult.message}`);
+        }
+      } catch (err) {
+        console.error('Error stopping sorting process:', err);
+      }
+
+      stopAutoSave();
+      setSessionActive(false);
+      setSessionPaused(false);
+      setCurrentSessionId(null);
+      setHardwareAlert('✅ Batch stopped and data saved successfully');
+      setTimeout(() => { fetchSessions(); }, 500);
     } catch (err) {
       console.error('Error ending batch', err);
+      setHardwareAlert(`Error ending batch: ${err.message}`);
+      stopAutoSave();
     }
   };
 
@@ -1061,6 +1182,13 @@ function Dashboard({ user, token, onLogout }) {
 
   // Close sidebar overlay when clicking outside of it
   // Keeps menu state consistent with user interactions
+  // Cleanup auto-save on component unmount
+  useEffect(() => {
+    return () => {
+      stopAutoSave();
+    };
+  }, []);
+
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (!menuOpen) return;

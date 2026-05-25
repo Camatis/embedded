@@ -49,7 +49,7 @@ model_lock = threading.Lock()
 CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 30
-DETECTION_INTERVAL = 8
+DETECTION_INTERVAL = 16  # Reduced from 8 to cut YOLO processing frequency in half
 MODEL_PATH = os.environ.get(
     'YOLO_MODEL_PATH',
     os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
