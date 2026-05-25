@@ -345,8 +345,6 @@ def home():
 
 
 if __name__ == '__main__':
-    global detection_queue, result_queue
-    
     # Create shared queues for detector process
     detection_queue = multiprocessing.Queue(maxsize=5)
     result_queue = multiprocessing.Queue(maxsize=5)
