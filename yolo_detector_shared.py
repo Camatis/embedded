@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Shared YOLO detector service for servotest.py and cam_stream2.py.
+"""Shared YOLO detector service for servotest.py.
 
 This service runs in a separate process and handles all YOLO detections.
-Both servotest and cam_stream2 communicate with it via multiprocessing.Queue.
+Servotest communicates with it via multiprocessing.Queue.
 
 Usage:
   python yolo_detector_shared.py
 
-Both servotest.py and cam_stream2.py will connect and send frames to detect.
+Servotest.py will connect and send frames to detect.
 """
 
 import multiprocessing
@@ -33,7 +33,7 @@ def run_yolo_detector():
     """Main YOLO detector worker - runs continuously.
     
     Reads frames from detection_queue, runs YOLO inference, puts results in result_queue.
-    This runs in a separate process so it doesn't block either servotest or cam_stream2.
+    This runs in a separate process so it doesn't block servotest.
     """
     global model
     
@@ -141,7 +141,7 @@ def start_shared_detector():
 
 if __name__ == '__main__':
     print("Starting shared YOLO detector service...")
-    print("Note: This should be imported by servotest.py and cam_stream2.py")
+    print("Note: This should be imported by servotest.py")
     print("Not meant to run standalone.")
     
     # For testing only:
