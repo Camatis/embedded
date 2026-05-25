@@ -344,18 +344,30 @@ def route_large():
 # 5. MAIN AUTONOMOUS SENSOR LOOP
 # ==========================================
 print("\n" + "="*45)
-print("     AUTONOMOUS SORTING ACTIVE")
+print("✅ SERVOTEST HARDWARE SERVICE READY")
 print("="*45)
-print("Waiting for mango at the Trigger Sensor...")
+print("Waiting for sorting START command...")
 print("Press Ctrl+C to cleanly shut down motors.")
 print("="*45)
 
 def autonomous_sorting_loop():
     """Main sorting loop running in background thread"""
     global sorting_active, sorting_paused, count_small, count_medium, count_large, count_defective, count_total, last_mango
+    last_state = None
     
     while True:
         try:
+            # Log state changes
+            current_state = 'active' if sorting_active else ('paused' if sorting_paused else 'waiting')
+            if current_state != last_state:
+                if current_state == 'active':
+                    print("\n🔴 SORTING STARTED - Waiting for mango at Trigger Sensor...")
+                elif current_state == 'paused':
+                    print("\n⏸️  SORTING PAUSED")
+                else:
+                    print("\n⏹️  SORTING IDLE - Waiting for start command...")
+                last_state = current_state
+            
             if not sorting_active:
                 time.sleep(0.1)
                 continue

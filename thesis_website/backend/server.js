@@ -79,6 +79,7 @@ const HARDWARE_CONTROL_FILE = '/tmp/mangosort_control.json';
 let hardwareProcess = null;
 let hardwareRunning = false;
 let hardwareStarting = false;
+let hardwareReady = false;
 let hardwareStartPromise = null;
 let countsResetTimestamp = null;  // Track when counts were cleared
 
@@ -113,7 +114,10 @@ async function ensureHardwareProcessRunning() {
   }
 
   if (await isHardwareServiceAvailable()) {
-    console.log('Detected existing hardware service on port 5000');
+    if (!hardwareReady) {
+      console.log('✅ Hardware service already running on port 5000');
+      hardwareReady = true;
+    }
     writeHardwareControlFile(true);
     return true;
   }
@@ -158,11 +162,13 @@ async function startHardwareProcess() {
   }
 
   hardwareStarting = true;
+  hardwareReady = false;  // Reset so startup message shows again
   hardwareStartPromise = (async () => {
     try {
       if (await isHardwareServiceAvailable()) {
-        console.log('Detected existing hardware service on port 5000 before spawning new process');
+        console.log('✅ Hardware service already running on port 5000 (skipping spawn)');
         writeHardwareControlFile(true);
+        hardwareReady = true;
         return { success: true, message: 'Hardware service already running' };
       }
 
@@ -205,7 +211,8 @@ async function startHardwareProcess() {
       });
 
       hardwareProcess.on('spawn', () => {
-        console.log(`Hardware process spawned with PID ${hardwareProcess.pid}`);
+        console.log(`✅ Hardware process spawned with PID ${hardwareProcess.pid}`);
+        hardwareReady = true;
       });
 
       hardwareProcess.on('error', (err) => {
@@ -1047,6 +1054,7 @@ app.post('/api/hardware/control', async (req, res) => {
     try {
         await ensureHardwareProcessRunning();
         const mappedAction = action === 'continue' ? 'resume' : action;
+        console.log(`📋 Sending sorting control command: ${mappedAction}`);
         await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction }, { timeout: 5000 });
         res.json({ success: true, message: `Sorting ${action} command sent` });
     } catch (error) {
