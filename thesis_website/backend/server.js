@@ -1007,7 +1007,7 @@ app.post('/api/hardware/gate', async (req, res) => {
     const { gate, action } = req.body;
     try {
         await ensureHardwareProcessRunning();
-        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/gate`, { gate, action });
+        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/gate`, { gate, action }, { timeout: 5000 });
         res.json({ success: true, message: `Gate ${gate} ${action} command sent` });
     } catch (error) {
         console.error('Error controlling gate:', error?.message || error);
@@ -1019,7 +1019,7 @@ app.post('/api/hardware/gate', async (req, res) => {
 app.get('/api/hardware/gate', async (req, res) => {
     try {
         await ensureHardwareProcessRunning();
-        const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/gate`);
+        const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/gate`, { timeout: 5000 });
         res.json(response.data);
     } catch (error) {
         console.error('Error fetching gate status:', error?.message || error);
@@ -1033,7 +1033,7 @@ app.post('/api/hardware/conveyor', async (req, res) => {
     try {
         await ensureHardwareProcessRunning();
         const mappedAction = action === 'continue' ? 'resume' : action;
-        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction });
+        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction }, { timeout: 5000 });
         res.json({ success: true, message: `Conveyor ${action} command sent` });
     } catch (error) {
         console.error('Error controlling conveyor:', error?.message || error);
@@ -1047,7 +1047,7 @@ app.post('/api/hardware/control', async (req, res) => {
     try {
         await ensureHardwareProcessRunning();
         const mappedAction = action === 'continue' ? 'resume' : action;
-        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction });
+        await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: mappedAction }, { timeout: 5000 });
         res.json({ success: true, message: `Sorting ${action} command sent` });
     } catch (error) {
         console.error('Error controlling sorting:', error?.message || error);
@@ -1059,7 +1059,7 @@ app.post('/api/hardware/control', async (req, res) => {
 app.get('/api/hardware/sensors', async (req, res) => {
     try {
         await ensureHardwareProcessRunning();
-        const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`);
+        const response = await axios.get(`${PYTHON_API_BASE_URL}/api/hardware/status`, { timeout: 5000 });
         const data = response.data || {};
         
         // If counts were recently cleared, suppress hardware counts for 1 second to allow reset to complete
@@ -1143,7 +1143,7 @@ app.post('/api/clear-sensor-data', async (req, res) => {
   
   // Also reset hardware controller counts
   try {
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/reset-counts`, {});
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/reset-counts`, {}, { timeout: 5000 });
     console.log('✓ Hardware counts reset');
   } catch (err) {
     console.warn('Failed to reset hardware counts:', err?.message || err);
@@ -1242,7 +1242,7 @@ app.post('/api/conveyor', async (req, res) => {
   try {
     const action = req.body?.action;
     await ensureHardwareProcessRunning();
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action });
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action }, { timeout: 5000 });
     res.json({ success: true, message: `Conveyor ${action} command sent` });
   } catch (error) {
     console.error('Error controlling conveyor:', error?.message || error);
@@ -1254,7 +1254,7 @@ app.post('/api/conveyor', async (req, res) => {
 app.post('/api/hardware/pause', async (req, res) => {
   try {
     await ensureHardwareProcessRunning();
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'pause' });
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'pause' }, { timeout: 5000 });
     res.json({ success: true, message: 'Hardware controller paused' });
   } catch (error) {
     console.error('Error pausing sorting:', error?.message || error);
@@ -1265,7 +1265,7 @@ app.post('/api/hardware/pause', async (req, res) => {
 app.post('/api/hardware/continue', async (req, res) => {
   try {
     await ensureHardwareProcessRunning();
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'continue' });
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'continue' }, { timeout: 5000 });
     res.json({ success: true, message: 'Hardware controller continued' });
   } catch (error) {
     console.error('Error continuing sorting:', error?.message || error);

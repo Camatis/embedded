@@ -238,9 +238,9 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
                 
-                # Send frame to YOLO detector every 16 frames (non-blocking)
+                # Send frame to YOLO detector every 4 frames (more frequent for less lag)
                 frame_id = self.frame_count
-                if (self.frame_count % 16) == 0 and detection_queue is not None:
+                if (self.frame_count % 4) == 0 and detection_queue is not None:
                     try:
                         # Don't wait for response - just queue the frame
                         # Encode frame as bytes for multiprocessing
@@ -250,10 +250,11 @@ class CameraTrack(VideoStreamTrack):
                         # Queue full or error - just skip, no blocking
                         pass
                 
-                # Check for results from YOLO detector
+                # Check for results from YOLO detector (drain queue to get freshest)
                 global last_detection_boxes, last_frame_id
                 if result_queue is not None:
                     try:
+                        # Drain entire queue to get the latest detection result
                         while True:
                             boxes, result_frame_id = result_queue.get(block=False)
                             if result_frame_id > last_frame_id:
@@ -350,9 +351,10 @@ def home():
 
 
 if __name__ == '__main__':
-    # Create shared queues for detector process
-    detection_queue = multiprocessing.Queue(maxsize=5)
-    result_queue = multiprocessing.Queue(maxsize=5)
+    # Create shared queues for detector process (larger size = less lag)
+    # Increased from 5 to 10 to handle more frames in flight
+    detection_queue = multiprocessing.Queue(maxsize=10)
+    result_queue = multiprocessing.Queue(maxsize=10)
     
     # Verify model exists
     if not os.path.exists(MODEL_PATH):
