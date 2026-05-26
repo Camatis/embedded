@@ -2,6 +2,40 @@ import RPi.GPIO as GPIO
 import time
 import cv2
 from ultralytics import YOLO
+import signal
+import sys
+
+# ==========================================
+# GRACEFUL SHUTDOWN SETUP
+# ==========================================
+def signal_handler(sig, frame):
+    print(f'\n📋 {signal.Signals(sig).name} received, initiating graceful shutdown...')
+    cleanup_hardware()
+    sys.exit(0)
+
+def cleanup_hardware():
+    """Safely stop all hardware operations."""
+    print('🛑 Stopping all hardware...')
+    try:
+        # Stop PWM gracefully
+        if 'hopper_pwm' in globals():
+            hopper_pwm.stop()
+            print('✅ Hopper servo stopped')
+        
+        # Close camera
+        if 'cap' in globals():
+            cap.release()
+            print('✅ Camera released')
+        
+        # Clean up GPIO
+        GPIO.cleanup()
+        print('✅ GPIO cleaned up')
+    except Exception as e:
+        print(f'⚠️  Error during cleanup: {e}')
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 # ==========================================
 # HARDWARE SETUP
@@ -163,7 +197,6 @@ try:
 except KeyboardInterrupt:
     print("\n🛑 Machine stopped by user.")
 finally:
-    hopper_pwm.stop()
-    GPIO.cleanup()
+    cleanup_hardware()
     cap.release()
 

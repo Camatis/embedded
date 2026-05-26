@@ -103,7 +103,7 @@ def run_yolo_detector():
                     frame_count += 1
                     
                     elapsed = time.time() - last_log_time
-                    if elapsed >= 10:  # Log every 10 seconds
+                    if elapsed >= 2:  # Log every 2 seconds
                         print(f"🎯 Shared YOLO: {frame_count} detections processed in {elapsed:.1f}s")
                         frame_count = 0
                         last_log_time = time.time()

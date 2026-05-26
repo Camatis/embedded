@@ -7,6 +7,8 @@ import subprocess
 import multiprocessing
 import cv2
 import numpy as np
+import signal
+import sys
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
 from flask import Flask, jsonify, request
@@ -15,6 +17,62 @@ from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
+
+# ==========================================
+# GRACEFUL SHUTDOWN SETUP
+# ==========================================
+def signal_handler(sig, frame):
+    print(f'\n📋 {signal.Signals(sig).name} received, initiating graceful shutdown...')
+    cleanup_hardware()
+    sys.exit(0)
+
+def cleanup_hardware():
+    """Safely stop all hardware operations."""
+    global sorting_active, sorting_paused, hopper_active, conveyor_pwm
+    print('🛑 Stopping all hardware...')
+    try:
+        sorting_active = False
+        sorting_paused = False
+        hopper_active = False
+        
+        # Stop conveyor gracefully
+        if 'conveyor_pwm' in globals():
+            conveyor_pwm.stop()
+            GPIO.output(RPWM, GPIO.LOW)
+            GPIO.output(LPWM, GPIO.LOW)
+            GPIO.output(R_EN, GPIO.LOW)
+            GPIO.output(L_EN, GPIO.LOW)
+            print('✅ Conveyor stopped')
+        
+        # Stop and close all servo gates
+        try:
+            rotating_gate.throttle = 0
+            barrier_gate.angle = BARRIER_LOCKED
+            small_gate.angle = GATE_CLOSED
+            medium_gate.angle = GATE_CLOSED
+            large_gate.angle = GATE_CLOSED
+            time.sleep(0.5)
+            print('✅ Servo gates closed')
+        except Exception as e:
+            print(f'⚠️  Error closing gates: {e}')
+        
+        # Deinit I2C/PCA
+        try:
+            if 'pca' in globals():
+                pca.deinit()
+            print('✅ PCA9685 deinitialized')
+        except:
+            pass
+        
+        # Clean up GPIO
+        GPIO.cleanup()
+        print('✅ GPIO cleaned up')
+    except Exception as e:
+        print(f'⚠️  Error during cleanup: {e}')
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 # ==========================================
 # 1. SETUP HARDWARE & AI
@@ -552,26 +610,8 @@ finally:
     print(f"Small: {count_small} | Medium: {count_medium} | Large: {count_large} | Defective: {count_defective}")
     print("="*30)
     
-    print("Powering down Conveyor and Hopper...")
-    sorting_active = False
-    sorting_paused = False
-    hopper_active = False 
-    conveyor_pwm.stop() 
-    GPIO.output(RPWM, GPIO.LOW)
-    GPIO.output(LPWM, GPIO.LOW)
-    GPIO.output(R_EN, GPIO.LOW)
-    GPIO.output(L_EN, GPIO.LOW)
+    cleanup_hardware()
     
-    rotating_gate.throttle = 0.0 
-    
-    barrier_gate.angle = BARRIER_LOCKED
-    small_gate.angle = GATE_CLOSED
-    medium_gate.angle = GATE_CLOSED
-    large_gate.angle = GATE_CLOSED
-    
-    time.sleep(0.5) 
-    pca.deinit()
-    GPIO.cleanup()
-    print("✅ Hardware safely powered down. Program exited.")
+    print("\n✅ Hardware safely powered down. Program exited.")
 
 

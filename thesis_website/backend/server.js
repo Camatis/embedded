@@ -995,6 +995,17 @@ app.post('/api/hardware/stop', (req, res) => {
   res.status(status).json(result);
 });
 
+// POST: Gracefully stop the entire system and hardware
+app.post('/api/system/stop', async (req, res) => {
+  console.log('System stop request received');
+  res.json({ success: true, message: 'System stopping gracefully' });
+  
+  // Give response time to send before shutting down
+  setTimeout(() => {
+    gracefulShutdown('API_STOP_REQUEST');
+  }, 500);
+});
+
 // GET: Check hardware controller status
 app.get('/api/hardware/status', (req, res) => {
   res.json({
@@ -1244,6 +1255,28 @@ app.post('/api/webrtc-offer', async (req, res) => {
   }
 });
 
+// Proxy hardware detection from webrtc_stream
+app.get('/api/hardware/detection', async (req, res) => {
+  const remoteUrl = process.env.RPI_WEBRTC_URL || 'http://127.0.0.1:8082';
+  try {
+    const useFetch = typeof fetch === 'function' ? fetch : require('node-fetch');
+    const response = await useFetch(`${remoteUrl}/detection`, {
+      timeout: 5000
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ multi_detection: false, detection_count: 0 });
+    }
+
+    const data = await response.json();
+    return res.json(data);
+  } catch (err) {
+    console.debug('Failed to fetch detection from webrtc_stream:', err.message);
+    // Return default safe response on error
+    return res.json({ multi_detection: false, detection_count: 0, detections: [] });
+  }
+});
+
 let conveyorProcess = null;
 
 app.post('/api/conveyor', async (req, res) => {
@@ -1299,12 +1332,66 @@ app.post('/api/dev/clear-users', async (req, res) => {
 
 const PORT = process.env.PORT || 5001;
 
+// Graceful shutdown function
+async function gracefulShutdown(signal) {
+  console.log(`\n📋 ${signal} received, initiating graceful shutdown...`);
+  
+  try {
+    // Stop hardware process gracefully
+    if (hardwareProcess && hardwareProcess.exitCode === null) {
+      console.log('🛑 Stopping hardware controller gracefully...');
+      writeHardwareControlFile(false);
+      hardwareProcess.kill('SIGTERM');
+      
+      // Wait for process to exit (with timeout)
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          console.warn('⚠️  Hardware process did not exit cleanly, forcing kill');
+          if (hardwareProcess && hardwareProcess.exitCode === null) {
+            hardwareProcess.kill('SIGKILL');
+          }
+          resolve();
+        }, 3000);
+        
+        hardwareProcess.on('close', () => {
+          clearTimeout(timeout);
+          console.log('✅ Hardware process stopped');
+          resolve();
+        });
+      });
+    }
+    
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error during graceful shutdown:', err);
+    process.exit(1);
+  }
+}
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught exception:', err);
+  gracefulShutdown('uncaughtException');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
+});
+
 // Server startup (HTTPS if certs exist, otherwise HTTP)
 function startServer() {
   // Force HTTP only (comment out HTTPS section for development)
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`✅ HTTP Server running on http://0.0.0.0:${PORT}`);
   });
+  
+  return server;
   
   /* Original HTTPS code (disabled for development):
   const keyPath = '/etc/ssl/private/key.pem';

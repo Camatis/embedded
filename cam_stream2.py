@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""WebRTC camera stream with YOLO overlay and reduced detection frequency.
+"""[DEPRECATED] WebRTC camera stream with YOLO overlay.
 
-Usage:
-  pip install flask aiortc opencv-python av picamera2 ultralytics
-  python cam_stream2.py
+⚠️  THIS FILE IS NO LONGER USED. Use webrtc_stream.py instead.
 
-Then from browser:
-  1) Create offer in JS via RTCPeerConnection
-  2) POST { sdp, type } to http://<rpi-ip>:8082/offer
-  3) Receive { sdp, type } answer and setRemoteDescription
+webrtc_stream.py is now the primary streaming solution and includes:
+- Multi-mango detection endpoint (/detection)
+- Shared YOLO detector integration
+- Bounding box visualization
+- Server.js proxy support
+
+This file is kept for reference only and should not be run.
 """
 
 import asyncio

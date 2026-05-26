@@ -254,6 +254,22 @@ def status():
     })
 
 
+@app.route('/detection', methods=['GET'])
+def detection():
+    """Return current detection status including multi-mango alerts."""
+    global last_detection_boxes
+    # Flag multi-detection if more than one mango detected
+    multi_detection = len(last_detection_boxes) > 1
+    return jsonify({
+        'multi_detection': multi_detection,
+        'detection_count': len(last_detection_boxes),
+        'detections': [
+            {'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2), 'confidence': float(conf), 'class': str(cls_name)}
+            for x1, y1, x2, y2, conf, cls_name in last_detection_boxes
+        ]
+    })
+
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'RPi WebRTC camera stream running', 'endpoint': '/offer'})
