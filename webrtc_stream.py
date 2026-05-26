@@ -163,7 +163,8 @@ class CameraTrack(VideoStreamTrack):
                 if result_queue is not None:
                     try:
                         while True:
-                            detections, result_frame_id, client_id = result_queue.get(block=False)
+                            result = result_queue.get(block=False)
+                            detections, result_frame_id, client_id = result[0], result[1], result[2]
                             # Only apply results from THIS client (ignore servotest/cam_stream2 results)
                             if client_id == WEBRTC_CLIENT_ID and result_frame_id > last_frame_id:
                                 last_detection_boxes = detections

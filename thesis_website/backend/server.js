@@ -1007,7 +1007,7 @@ app.get('/api/hardware/status', (req, res) => {
 const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL || 'http://127.0.0.1:5000';
 const PYTHON_HARDWARE_SCRIPT = process.env.PYTHON_HARDWARE_SCRIPT || path.resolve(__dirname, '..', '..', 'servotest.py');
 const HARDWARE_READY_TIMEOUT_MS = Number(process.env.HARDWARE_READY_TIMEOUT_MS) || 60000;
-const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS) || 500;
+const HARDWARE_READY_INTERVAL_MS = Number(process.env.HARDWARE_READY_INTERVAL_MS) || 300;
 
 // New endpoint to control gates
 app.post('/api/hardware/gate', async (req, res) => {

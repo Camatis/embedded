@@ -142,6 +142,10 @@ gate_states = {
     "large": "closed"
 }
 
+# Detection tracking for multi-mango alert
+multi_detection_flag = False
+multi_detection_lock = threading.Lock()
+
 # ==========================================
 # 4. BACKGROUND THREAD FUNCTIONS
 # ==========================================
@@ -302,6 +306,17 @@ def reset_counts():
         }
     })
 
+@app.route('/api/hardware/detection', methods=['GET'])
+def get_detection_status():
+    """Get multi-detection alert status"""
+    global multi_detection_flag
+    with multi_detection_lock:
+        flag = multi_detection_flag
+        multi_detection_flag = False  # Reset after reading
+    return jsonify({
+        'multi_detection': flag
+    })
+
 def operate_stopper():
     barrier_gate.angle = BARRIER_RELEASED
     time.sleep(STOPPER_DELAY)
@@ -399,11 +414,19 @@ def autonomous_sorting_loop():
                             for _ in range(50):  # Wait up to 5 seconds (50 * 0.1)
                                 try:
                                     while True:
-                                        detections, result_frame_id, client_id = result_queue.get(block=False)
+                                        result = result_queue.get(block=False)
+                                        detections, result_frame_id, client_id = result[0], result[1], result[2]
+                                        multi_detection = result[3] if len(result) > 3 else False
                                         if client_id == SERVOTEST_CLIENT_ID:
                                             # Found our result
                                             with detection_result_lock:
                                                 last_detection_result = detections
+                                            # Set multi-detection flag if 2+ mangoes detected
+                                            if multi_detection:
+                                                with multi_detection_lock:
+                                                    global multi_detection_flag
+                                                    multi_detection_flag = True
+                                                print("⚠️ MULTIPLE MANGOES DETECTED!")
                                             result_received = True
                                             break
                                 except:

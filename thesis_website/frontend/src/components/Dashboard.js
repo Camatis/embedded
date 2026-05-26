@@ -53,6 +53,7 @@ function Dashboard({ user, token, onLogout }) {
   const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
   const [limitAlert, setLimitAlert] = useState('');
   const [showLimitAlert, setShowLimitAlert] = useState(false);
+  const [showTwoMangoesPopup, setShowTwoMangoesPopup] = useState(false);
   
   // Gate state tracking
   const [gateStates, setGateStates] = useState({
@@ -647,6 +648,32 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
+  // Poll detection status for multi-mango alerts
+  useEffect(() => {
+    let mounted = true;
+    const pollDetectionStatus = async () => {
+      try {
+        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/detection`;
+        const res = await fetch(apiUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (mounted && data.multi_detection === true) {
+            setShowTwoMangoesPopup(true);
+            console.log('🥭🥭 Multiple mangoes detected!');
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching detection status', err);
+      }
+    };
+    
+    const intervalId = setInterval(pollDetectionStatus, 500);
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+    };
+  }, []);
+
   // Autosave counts periodically while session is active
   useEffect(() => {
     if (!sessionActive || !currentSessionId) return;
@@ -1213,6 +1240,15 @@ function Dashboard({ user, token, onLogout }) {
             <div className="tutorial-close" onClick={() => setShowLimitAlert(false)}>✕</div>
             <h3 style={{ color: 'red' }}>Amount limit reached</h3>
             <p>{limitAlert}</p>
+          </div>
+        </div>
+      )}
+      {showTwoMangoesPopup && (
+        <div className="tutorial-overlay" onClick={() => setShowTwoMangoesPopup(false)}>
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => setShowTwoMangoesPopup(false)}>✕</div>
+            <h3 style={{ color: 'orange' }}>⚠️ More than one mango detected</h3>
+            <p>Multiple mangoes were detected on the conveyor. Please inspect the system.</p>
           </div>
         </div>
       )}

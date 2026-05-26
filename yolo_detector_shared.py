@@ -73,7 +73,7 @@ def run_yolo_detector():
             
             # Run detection
             try:
-                results = model(frame, verbose=False, conf=0.5)
+                results = model(frame, verbose=False, conf=0.6, imgsz=320)
                 detections = []
                 
                 if results and len(results) > 0:
@@ -96,8 +96,10 @@ def run_yolo_detector():
                             detections.append((x1, y1, x2, y2, conf, cls_name))
                 
                 # Put results in queue (non-blocking, tagged with client_id)
+                # Include multi_detection flag if 2+ mangoes detected
+                multi_detection = len(detections) > 1
                 try:
-                    result_queue.put((detections, frame_id, client_id), block=False)
+                    result_queue.put((detections, frame_id, client_id, multi_detection), block=False)
                     frame_count += 1
                     
                     elapsed = time.time() - last_log_time
