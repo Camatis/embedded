@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 import signal
 import sys
+import zmq
+import json
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
 from flask import Flask, jsonify, request
@@ -157,12 +159,12 @@ medium_gate.angle = GATE_CLOSED
 large_gate.angle = GATE_CLOSED
 time.sleep(1)
 
-# --- Shared YOLO Detector (will be initialized in main) ---
-detection_queue = None
-result_queue = None
-SERVOTEST_CLIENT_ID = 'servotest'
-last_detection_result = None
-detection_result_lock = threading.Lock()
+# --- Shared ZMQ Detection (subscribe to webrtc_stream) ---
+zmq_context = None
+detection_subscriber = None
+DETECTION_PORT = 5555
+last_detection_data = None
+detection_lock = threading.Lock()
 
 # ==========================================
 # 2. TIMING VARIABLES 
@@ -455,59 +457,38 @@ def autonomous_sorting_loop():
                 try:
                     subprocess.run(["rpicam-jpeg", "-o", "current_mango.jpg", "-t", "1", "--nopreview"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
                     
-                    # 2. Send photo to shared YOLO detector for analysis
-                    if detection_queue is not None:
-                        print("🧠 AI Analyzing image via shared detector...")
-                        try:
-                            with open("current_mango.jpg", "rb") as f:
-                                frame_bytes = f.read()
-                            
-                            # Send to shared detector (frame_id doesn't matter, just use counter)
-                            frame_id = time.time()
-                            detection_queue.put((frame_bytes, frame_id, SERVOTEST_CLIENT_ID), block=False)
-                            
-                            # Wait briefly for results from shared detector
-                            # Check queue with timeout to avoid blocking
-                            result_received = False
-                            for _ in range(50):  # Wait up to 5 seconds (50 * 0.1)
-                                try:
-                                    while True:
-                                        result = result_queue.get(block=False)
-                                        detections, result_frame_id, client_id = result[0], result[1], result[2]
-                                        multi_detection = result[3] if len(result) > 3 else False
-                                        if client_id == SERVOTEST_CLIENT_ID:
-                                            # Found our result
-                                            with detection_result_lock:
-                                                last_detection_result = detections
-                                            # Set multi-detection flag if 2+ mangoes detected
-                                            if multi_detection:
-                                                with multi_detection_lock:
-                                                    global multi_detection_flag
-                                                    multi_detection_flag = True
-                                                print("⚠️ MULTIPLE MANGOES DETECTED!")
-                                            result_received = True
-                                            break
-                                except:
-                                    pass
+                    # 2. Get defect analysis from webrtc_stream (via ZMQ subscription)
+                    print("🧠 Checking defect status from camera detection...")
+                    is_defective = False
+                    try:
+                        # Try to receive latest detection from ZMQ (non-blocking)
+                        if detection_subscriber is not None:
+                            try:
+                                detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
+                                with detection_lock:
+                                    last_detection_data = detection_data
                                 
-                                if result_received:
-                                    break
-                                time.sleep(0.1)
-                            
-                            # Check results
-                            with detection_result_lock:
-                                if last_detection_result is not None:
-                                    for x1, y1, x2, y2, conf, cls_name in last_detection_result:
-                                        if cls_name:
-                                            cn = str(cls_name).strip().lower()
-                                            # Check if explicitly defective (NOT "not defective")
-                                            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn):
-                                                is_defective = True
-                                                break
-                        except Exception as e:
-                            print(f"⚠️ Shared detector error: {e}")
-                    else:
-                        print("⚠️ Shared YOLO detector not available")
+                                # Check if defective
+                                is_defective = detection_data.get('is_defective', False)
+                                multi_detection = detection_data.get('multi_detection', False)
+                                
+                                if is_defective:
+                                    print(f"🚨 Defective mango detected!")
+                                if multi_detection:
+                                    print("⚠️ MULTIPLE MANGOES DETECTED!")
+                                    with multi_detection_lock:
+                                        global multi_detection_flag
+                                        multi_detection_flag = True
+                            except zmq.Again:
+                                # No new detection message, use last known result
+                                with detection_lock:
+                                    if last_detection_data:
+                                        is_defective = last_detection_data.get('is_defective', False)
+                        else:
+                            print("⚠️ Detection service not available, assuming mango is Good")
+                            is_defective = False
+                    except Exception as e:
+                        print(f"⚠️ Detection error: {e}, assuming Good")
                         
                 except subprocess.TimeoutExpired:
                     print(f"⚠️ Camera timeout: rpicam-jpeg took too long. Assuming mango is Good.")
@@ -575,15 +556,19 @@ def autonomous_sorting_loop():
             traceback.print_exc()
             time.sleep(1)  # Prevent spam if error keeps happening
 
-# Initialize shared YOLO detector
+# Initialize ZMQ detection subscriber (listening to webrtc_stream)
 try:
-    from yolo_detector_shared import start_shared_detector
-    print("🔍 Initializing shared YOLO detector...")
-    detection_queue, result_queue = start_shared_detector()
-    print("✓ Shared YOLO detector initialized")
+    zmq_context = zmq.Context()
+    detection_subscriber = zmq_context.socket(zmq.SUB)
+    detection_subscriber.setsockopt(zmq.RCVHWM, 1)  # Keep only latest message
+    detection_subscriber.connect(f"tcp://127.0.0.1:{DETECTION_PORT}")
+    detection_subscriber.subscribe(b"")  # Subscribe to all messages
+    print(f"✓ ZMQ detection subscriber initialized on tcp://127.0.0.1:{DETECTION_PORT}")
+    time.sleep(0.5)  # Give time for connection to establish
 except Exception as e:
-    print(f"⚠️ Failed to start shared YOLO detector: {e}")
-    print("⚠️  servotest will attempt sorting without defect detection")
+    print(f"⚠️ Failed to initialize ZMQ: {e}")
+    print("⚠️ servotest will attempt sorting without defect detection")
+    detection_subscriber = None
 
 # Start sorting loop in background thread
 sorting_thread = threading.Thread(target=autonomous_sorting_loop)

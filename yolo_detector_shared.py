@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Shared YOLO detector service for servotest.py.
+"""Shared YOLO detector service with TTL (time-to-live) for fresh detections.
 
-This service runs in a separate process and handles all YOLO detections.
-Servotest communicates with it via multiprocessing.Queue.
+Single result_queue shared by all clients (webrtc_stream, servotest).
+Results include timestamp so clients can auto-clear stale detections.
 
 Usage:
-  python yolo_detector_shared.py
-
-Servotest.py will connect and send frames to detect.
+  detection_queue, result_queue = start_shared_detector()
+  DETECTION_TTL_FRAMES = 5  # Clear if no new detection for 5 frames
 """
 
 import multiprocessing
@@ -23,17 +22,20 @@ MODEL_PATH = os.environ.get(
     os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
 )
 
-# Global queues (shared across processes)
+# Global queues (shared across all clients)
 detection_queue = None
 result_queue = None
 model = None
+
+# TTL configuration - clients should use this
+DETECTION_TTL_FRAMES = 5  # Clear boxes if no detection for 5+ frames
 
 
 def run_yolo_detector():
     """Main YOLO detector worker - runs continuously.
     
-    Reads frames from detection_queue, runs YOLO inference, puts results in result_queue.
-    This runs in a separate process so it doesn't block servotest.
+    Reads frames from detection_queue, runs YOLO inference, puts results in shared result_queue.
+    All results include timestamp for TTL-based clearing by clients.
     """
     global model
     
@@ -95,16 +97,19 @@ def run_yolo_detector():
                                 pass
                             detections.append((x1, y1, x2, y2, conf, cls_name))
                 
-                # Put results in queue (non-blocking, tagged with client_id)
-                # Include multi_detection flag if 2+ mangoes detected
                 multi_detection = len(detections) > 1
+                
+                # Put results in SHARED queue with timestamp
                 try:
-                    result_queue.put((detections, frame_id, client_id, multi_detection), block=False)
+                    result_queue.put(
+                        (detections, frame_id, client_id, multi_detection, time.time()),
+                        block=False
+                    )
                     frame_count += 1
                     
                     elapsed = time.time() - last_log_time
                     if elapsed >= 2:  # Log every 2 seconds
-                        print(f"🎯 Shared YOLO: {frame_count} detections processed in {elapsed:.1f}s")
+                        print(f"🎯 Shared YOLO: {frame_count} frames processed, result queue size: {result_queue.qsize()}")
                         frame_count = 0
                         last_log_time = time.time()
                 except:
@@ -125,9 +130,9 @@ def start_shared_detector():
     """Initialize and start the shared YOLO detector process."""
     global detection_queue, result_queue
     
-    # Create queues with reasonable sizes
-    detection_queue = multiprocessing.Queue(maxsize=15)
-    result_queue = multiprocessing.Queue(maxsize=15)
+    # Create queues - larger size to handle multiple clients
+    detection_queue = multiprocessing.Queue(maxsize=20)
+    result_queue = multiprocessing.Queue(maxsize=20)
     
     # Start detector process
     detector_process = multiprocessing.Process(
@@ -143,7 +148,7 @@ def start_shared_detector():
 
 if __name__ == '__main__':
     print("Starting shared YOLO detector service...")
-    print("Note: This should be imported by servotest.py")
+    print("Note: This should be imported by servotest.py and webrtc_stream.py")
     print("Not meant to run standalone.")
     
     # For testing only:

@@ -21,11 +21,12 @@ import threading
 import time
 import sys
 import os
+import zmq
+import json
 from flask import Flask, request, jsonify
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from av import VideoFrame
 from picamera2 import Picamera2
-import multiprocessing
 
 app = Flask(__name__)
 pcs = set()
@@ -53,14 +54,15 @@ CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 30
 
-# Shared YOLO detector queues (will be set by main)
-detection_queue = None
-result_queue = None
-WEBRTC_CLIENT_ID = 'webrtc_stream'
+# ZMQ detection publisher (for servotest to consume)
+zmq_context = None
+detection_publisher = None
+DETECTION_PORT = 5555
 
-# Cache latest detections
-last_detection_boxes = []
-last_frame_id = -1
+# Detection state cache for /api/detections endpoint
+last_detections = []
+last_multi_detection = False
+detection_cache_lock = threading.Lock()
 
 def init_camera():
     global camera
@@ -125,6 +127,21 @@ class CameraTrack(VideoStreamTrack):
         self.fps = fps
         self.frame_count = 0
         self.camera_available = False
+        
+        # Load YOLO model
+        print("Loading YOLO model...")
+        try:
+            from ultralytics import YOLO
+            model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
+            if not os.path.exists(model_path):
+                print(f"⚠ YOLO model not found at {model_path}")
+                self.yolo_model = None
+            else:
+                self.yolo_model = YOLO(model_path)
+                print(f"✓ YOLO model loaded from {model_path}")
+        except Exception as e:
+            print(f"⚠ Failed to load YOLO model: {e}")
+            self.yolo_model = None
 
         try:
             init_camera()
@@ -138,7 +155,7 @@ class CameraTrack(VideoStreamTrack):
             print("⚠ Camera not available - will stream black frames as fallback")
 
     async def recv(self):
-        """Capture frame and stream via WebRTC (non-blocking)."""
+        """Capture frame, run YOLO detection, publish via ZMQ, and stream via WebRTC."""
         pts, time_base = await self.next_timestamp()
 
         if self.camera_available:
@@ -148,33 +165,43 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
                 
-                # Send frame to shared YOLO detector every 4 frames
-                frame_id = self.frame_count
-                if (self.frame_count % 4) == 0 and detection_queue is not None:
+                # Run YOLO detection every 4 frames (~7.5 FPS at 30 FPS camera)
+                if (self.frame_count % 4) == 0 and self.yolo_model is not None:
                     try:
-                        frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
-                        detection_queue.put((frame_bytes, frame_id, WEBRTC_CLIENT_ID), block=False)
+                        detection_boxes = self._run_detection(frame)
+                        is_defective = self._check_defective(detection_boxes)
+                        
+                        # Update detection cache for /api/detections endpoint
+                        with detection_cache_lock:
+                            global last_detections, last_multi_detection
+                            last_detections = detection_boxes
+                            last_multi_detection = len(detection_boxes) > 1
+                        
+                        # Publish detection results via ZMQ
+                        if detection_publisher is not None:
+                            detection_msg = {
+                                'detections': [
+                                    {
+                                        'x1': int(x1), 'y1': int(y1), 
+                                        'x2': int(x2), 'y2': int(y2),
+                                        'confidence': float(conf),
+                                        'class': str(cls_name) if cls_name else 'mango'
+                                    }
+                                    for x1, y1, x2, y2, conf, cls_name in detection_boxes
+                                ],
+                                'is_defective': is_defective,
+                                'multi_detection': len(detection_boxes) > 1,
+                                'timestamp': time.time()
+                            }
+                            try:
+                                detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
+                            except zmq.Again:
+                                pass  # Queue full, skip this publish
                     except Exception as e:
-                        # Queue full or error - skip, no blocking
-                        pass
+                        print(f"⚠ Detection error: {e}")
                 
-                # Check for results from shared YOLO detector (drain queue to get freshest)
-                global last_detection_boxes, last_frame_id
-                if result_queue is not None:
-                    try:
-                        while True:
-                            result = result_queue.get(block=False)
-                            detections, result_frame_id, client_id = result[0], result[1], result[2]
-                            # Only apply results from THIS client (ignore servotest/cam_stream2 results)
-                            if client_id == WEBRTC_CLIENT_ID and result_frame_id > last_frame_id:
-                                last_detection_boxes = detections
-                                last_frame_id = result_frame_id
-                    except:
-                        # No new results in queue
-                        pass
-                
-                # Draw latest detection boxes (non-blocking)
-                frame = draw_detection_boxes(frame, last_detection_boxes)
+                # Draw detection boxes on frame
+                frame = draw_detection_boxes(frame, last_detections)
                 self.frame_count += 1
                 
             except Exception as e:
@@ -196,6 +223,49 @@ class CameraTrack(VideoStreamTrack):
             video_frame.pts = pts
             video_frame.time_base = time_base
             return video_frame
+    
+    def _run_detection(self, frame):
+        """Run YOLO detection on frame."""
+        if self.yolo_model is None:
+            return []
+        
+        try:
+            results = self.yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
+            detections = []
+            
+            if results and len(results) > 0:
+                result = results[0]
+                boxes = result.boxes
+                if boxes is not None and len(boxes) > 0:
+                    for box in boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        conf = float(box.conf[0])
+                        cls_name = None
+                        try:
+                            if hasattr(box, 'cls') and box.cls is not None:
+                                cls_idx = int(box.cls[0])
+                                if hasattr(self.yolo_model, 'names'):
+                                    cls_name = self.yolo_model.names.get(cls_idx, str(cls_idx))
+                                else:
+                                    cls_name = str(cls_idx)
+                        except Exception:
+                            pass
+                        detections.append((x1, y1, x2, y2, conf, cls_name))
+            
+            return detections
+        except Exception as e:
+            print(f"⚠ YOLO inference error: {e}")
+            return []
+    
+    def _check_defective(self, detection_boxes):
+        """Check if any detection is defective."""
+        for x1, y1, x2, y2, conf, cls_name in detection_boxes:
+            if cls_name:
+                cn = str(cls_name).strip().lower()
+                # Check if explicitly defective (NOT "not defective")
+                if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
+                    return True
+        return False
 
 
 @app.route('/offer', methods=['POST'])
@@ -250,24 +320,44 @@ def status():
         'stream_running': True,
         'resolution': f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}",
         'fps': CAMERA_FPS,
-        'detection_mode': 'separate_process'
+        'detection_mode': 'embedded_yolo'
     })
 
 
 @app.route('/detection', methods=['GET'])
 def detection():
     """Return current detection status including multi-mango alerts."""
-    global last_detection_boxes
-    # Flag multi-detection if more than one mango detected
-    multi_detection = len(last_detection_boxes) > 1
-    return jsonify({
-        'multi_detection': multi_detection,
-        'detection_count': len(last_detection_boxes),
-        'detections': [
-            {'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2), 'confidence': float(conf), 'class': str(cls_name)}
-            for x1, y1, x2, y2, conf, cls_name in last_detection_boxes
-        ]
-    })
+    global last_detections, last_multi_detection
+    with detection_cache_lock:
+        return jsonify({
+            'multi_detection': last_multi_detection,
+            'detection_count': len(last_detections),
+            'detections': [
+                {'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2), 'confidence': float(conf), 'class': str(cls_name)}
+                for x1, y1, x2, y2, conf, cls_name in last_detections
+            ]
+        })
+
+
+@app.route('/api/detections', methods=['GET'])
+def get_detections():
+    """Return latest detection results for servotest to consume."""
+    global last_detections, last_multi_detection
+    with detection_cache_lock:
+        detections_formatted = []
+        for x1, y1, x2, y2, conf, cls_name in last_detections:
+            detections_formatted.append({
+                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'confidence': conf,
+                'class': cls_name
+            })
+        
+        return jsonify({
+            'detections': detections_formatted,
+            'count': len(detections_formatted),
+            'multi_detection': last_multi_detection,
+            'timestamp': time.time()
+        })
 
 
 @app.route('/', methods=['GET'])
@@ -276,15 +366,18 @@ def home():
 
 
 if __name__ == '__main__':
-    # Import and start shared YOLO detector
+    # Initialize ZMQ publisher for detection results
     try:
-        from yolo_detector_shared import start_shared_detector
-        print("Starting shared YOLO detector...")
-        detection_queue, result_queue = start_shared_detector()
-        print("✓ Shared YOLO detector initialized")
+        global zmq_context, detection_publisher
+        zmq_context = zmq.Context()
+        detection_publisher = zmq_context.socket(zmq.PUB)
+        detection_publisher.setsockopt(zmq.SNDHWM, 1)  # Keep only latest message
+        detection_publisher.bind(f"tcp://127.0.0.1:{DETECTION_PORT}")
+        print(f"✓ ZMQ detection publisher started on tcp://127.0.0.1:{DETECTION_PORT}")
+        time.sleep(0.5)  # Give subscribers time to connect
     except Exception as e:
-        print(f"⚠ Failed to start shared YOLO detector: {e}")
-        print("  webrtc_stream will run without detection")
+        print(f"⚠ Failed to initialize ZMQ: {e}")
+        detection_publisher = None
     
     print("Starting Mango Sorter WebRTC stream on port 8082...")
     print("Access endpoint: http://0.0.0.0:8082/offer")
