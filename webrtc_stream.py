@@ -368,7 +368,6 @@ def home():
 if __name__ == '__main__':
     # Initialize ZMQ publisher for detection results
     try:
-        global zmq_context, detection_publisher
         zmq_context = zmq.Context()
         detection_publisher = zmq_context.socket(zmq.PUB)
         detection_publisher.setsockopt(zmq.SNDHWM, 1)  # Keep only latest message
