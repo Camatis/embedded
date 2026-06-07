@@ -48,7 +48,7 @@ def cleanup_hardware():
         
         # Stop and close all servo gates
         try:
-            rotating_gate.throttle = 0
+            set_hopper(HOPPER_REST)
             barrier_gate.angle = BARRIER_LOCKED
             small_gate.angle = GATE_CLOSED
             medium_gate.angle = GATE_CLOSED
@@ -143,8 +143,7 @@ pca.frequency = 50
 barrier_gate = servo.Servo(pca.channels[0])
 medium_gate = servo.Servo(pca.channels[2])
 large_gate = servo.Servo(pca.channels[3])
-small_gate = servo.Servo(pca.channels[6])   
-rotating_gate = servo.ContinuousServo(pca.channels[12]) 
+small_gate = servo.Servo(pca.channels[6])
 
 # Servo Angles
 GATE_CLOSED = 70
@@ -152,12 +151,40 @@ GATE_OPEN = 0
 BARRIER_LOCKED = 0
 BARRIER_RELEASED = 90
 
+# ==========================================
+# HOPPER RAW PWM CONTROL
+# ==========================================
+# PCA9685 at 50Hz = 20ms period
+# 12-bit resolution = 4096 steps
+# Formula: pulse_width_ms / 20ms * 4096
+#
+#   180° (REST)  = 2.5ms → 4096 * (2.5/20) = 512 ticks ← arm fully LEFT
+#   90°  (MID)   = 1.5ms → 4096 * (1.5/20) = 307 ticks ← arm CENTER
+#   0°   (FULL)  = 0.5ms → 4096 * (0.5/20) = 102 ticks ← arm fully RIGHT
+#
+# ⬇️ TUNE THESE if rotation is still off (±20 ticks)
+
+HOPPER_CHANNEL  = 12
+HOPPER_REST     = 512  # 180° — arm fully LEFT, resting position
+HOPPER_90_TICK  = 307  # 90°  — arm CENTER, pipeline drop
+HOPPER_0_TICK   = 102  # 0°   — arm fully RIGHT, first prime drop
+HOPPER_FULL_TRAVEL = 1.5  # Seconds to complete a 180° sweep
+HOPPER_HALF_TRAVEL = 1.0  # Seconds to complete a 90° sweep
+
+def set_hopper(ticks):
+    """Directly sets the hopper servo position via raw PCA9685 PWM ticks."""
+    pca.channels[HOPPER_CHANNEL].duty_cycle = int(ticks * 65535 / 4096)
+
 print("Locking sorting gates to default positions...")
 barrier_gate.angle = BARRIER_LOCKED
 small_gate.angle = GATE_CLOSED
 medium_gate.angle = GATE_CLOSED
 large_gate.angle = GATE_CLOSED
 time.sleep(1)
+
+print("Aligning Hopper Servo to rest position (180° / arm fully LEFT)...")
+initial_startup_drop()
+time.sleep(2)
 
 # --- Shared ZMQ Detection (subscribe to webrtc_stream) ---
 zmq_context = None
@@ -212,24 +239,54 @@ multi_detection_lock = threading.Lock()
 # Conveyor belt will be controlled via API commands, not auto-started
 GPIO.output(R_EN, GPIO.HIGH)
 GPIO.output(L_EN, GPIO.HIGH)
-GPIO.output(LPWM, GPIO.LOW) 
+GPIO.output(LPWM, GPIO.LOW)
 
-hopper_active = True 
+def initial_startup_drop():
+    """
+    Priming sequence:
+    - Hopper rests at 180° (arm fully LEFT)
+    - Rotates to 0° (arm fully RIGHT) to give the first mango
+    - Resets back to 180° (bearing slips, won't pull mango back)
+    """
+    print("\n🚀 Priming Hopper: Rotating to 0° for First Mango...")
+    # Confirm at rest (180°) before sweeping
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # Sweep to 0° (arm fully RIGHT) to give first mango
+    set_hopper(HOPPER_0_TICK)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # Reset back to 180° (bearing slips)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✅ First mango loaded into chamber.]")
 
-def pulse_hopper():
-    while hopper_active:
-        rotating_gate.throttle = -0.15  
-        for _ in range(20):
-            if not hopper_active: return
-            time.sleep(0.1)
-        rotating_gate.throttle = 0.0    
-        for _ in range(30):
-            if not hopper_active: return
-            time.sleep(0.1)
-
-hopper_thread = threading.Thread(target=pulse_hopper)
-hopper_thread.daemon = True 
-hopper_thread.start()
+def operate_stopper_and_hopper():
+    """
+    Pipeline sequence (runs in separate thread):
+    1. Open stopper → release scanned mango onto belt.
+    2. Close stopper.
+    3. Rotate hopper from 180° to 90° → drop next mango into chamber.
+    4. Reset hopper back to 180°.
+    """
+    print("   🔄 PIPELINE: Opening Stopper Gate...")
+    # 1. Open stopper
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(STOPPER_DELAY)
+    # 2. Close stopper
+    barrier_gate.angle = BARRIER_LOCKED
+    print("   [🚧 Stopper Gate locked]")
+    time.sleep(1.0)  # Let stopper fully close before hopper moves
+    # 3. Confirm hopper is at 180° rest before sweeping
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # 4. Rotate to 90° (arm CENTER) to push next mango into chamber
+    print("   🔄 Hopper rotating to 90°...")
+    set_hopper(HOPPER_90_TICK)
+    time.sleep(HOPPER_HALF_TRAVEL)
+    # 5. Reset back to 180° (bearing slips)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✅ Next mango loaded into chamber.]")
 
 # ==========================================
 # FLASK API ENDPOINTS
@@ -262,11 +319,14 @@ def hardware_control():
     action = data.get('action')
     
     if action == 'start':
+        # Prime the hopper in a separate thread so UI doesn't hang
+        threading.Thread(target=initial_startup_drop).start()
+        
         sorting_active = True
         sorting_paused = False
         batch_state = 'running'
         set_conveyor_speed(CONVEYOR_SPEED)
-        return jsonify({'success': True, 'message': 'Sorting started'})
+        return jsonify({'success': True, 'message': 'Sorting started - priming hopper'})
     elif action == 'pause':
         sorting_active = False
         sorting_paused = True
@@ -378,6 +438,7 @@ def get_detection_status():
     })
 
 def operate_stopper():
+    """Release stopper only (hopper managed separately)."""
     barrier_gate.angle = BARRIER_RELEASED
     time.sleep(STOPPER_DELAY)
     barrier_gate.angle = BARRIER_LOCKED
@@ -506,8 +567,8 @@ def autonomous_sorting_loop():
                         detected_size = "MEDIUM"
                     time.sleep(0.01) 
 
-                # 4. Fire off the stopper thread for every mango
-                threading.Thread(target=operate_stopper).start() 
+                # 4. Fire off the stopper and hopper thread for every mango
+                threading.Thread(target=operate_stopper_and_hopper).start() 
                 
                 # 5. Routing & Counting Logic
                 count_total += 1
