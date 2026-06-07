@@ -194,29 +194,31 @@ class CameraTrack(VideoStreamTrack):
                             global last_detections, last_multi_detection
                             last_detections = detection_boxes
                             last_multi_detection = len(detection_boxes) > 1
-                        
-                        # Publish detection results via ZMQ
-                        if detection_publisher is not None:
-                            detection_msg = {
-                                'detections': [
-                                    {
-                                        'x1': int(x1), 'y1': int(y1), 
-                                        'x2': int(x2), 'y2': int(y2),
-                                        'confidence': float(conf),
-                                        'class': str(cls_name) if cls_name else 'mango'
-                                    }
-                                    for x1, y1, x2, y2, conf, cls_name in detection_boxes
-                                ],
-                                'is_defective': is_defective,
-                                'multi_detection': len(detection_boxes) > 1,
-                                'timestamp': time.time()
-                            }
-                            try:
-                                detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
-                            except zmq.Again:
-                                pass  # Queue full, skip this publish
                     except Exception as e:
                         print(f"⚠ Detection error: {e}")
+                
+                # ALWAYS publish latest detection state via ZMQ (every frame, not just every 2 frames)
+                # This ensures servotest always gets fresh data
+                if detection_publisher is not None:
+                    with detection_cache_lock:
+                        detection_msg = {
+                            'detections': [
+                                {
+                                    'x1': int(x1), 'y1': int(y1), 
+                                    'x2': int(x2), 'y2': int(y2),
+                                    'confidence': float(conf),
+                                    'class': str(cls_name) if cls_name else 'mango'
+                                }
+                                for x1, y1, x2, y2, conf, cls_name in last_detections
+                            ],
+                            'is_defective': self._check_defective(last_detections),
+                            'multi_detection': last_multi_detection,
+                            'timestamp': time.time()
+                        }
+                    try:
+                        detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
+                    except zmq.Again:
+                        pass  # Queue full, skip this publish
                 
                 # Draw detection boxes on frame
                 frame = draw_detection_boxes(frame, last_detections)
