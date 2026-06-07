@@ -476,6 +476,14 @@ def route_large():
     gate_states['large'] = 'closed'
     print("   [Large Gate Closed]")
 
+def route_defective():
+    """Reject defective mango - no gates open, stays on belt for travel time"""
+    print("   [Defective Mango Rejected - No Gates Opening]")
+    print("   ⏳ Mango will travel on belt for rejection...")
+    # Wait for the time it would take for a large mango to travel (longest route)
+    time.sleep(TIME_TO_LARGE + LARGE_DROP_TIME)
+    print("   [✅ Defective mango rejection complete]")
+
 # ==========================================
 # 5. MAIN AUTONOMOUS SENSOR LOOP
 # ==========================================
@@ -576,7 +584,7 @@ def autonomous_sorting_loop():
                 if is_defective:
                     print("🎯 DECISION: Mango is DEFECTIVE. Routing to reject bin.")
                     count_defective += 1
-                    # NOTE: If you have a specific servo for defective fruit, trigger its thread here!
+                    threading.Thread(target=route_defective).start()
                     
                 else:
                     print(f"🎯 DECISION: Mango is Good. Classified as {detected_size}.")
