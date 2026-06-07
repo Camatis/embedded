@@ -159,21 +159,15 @@ def check_defective(detection_boxes):
     return False
 
 
-def background_capture_and_detect():
-    """Background thread: capture frames and run YOLO detection continuously.
+def background_capture():
+    """Capture thread: grab frames from the camera at full FPS.
 
-    Decouples camera capture and YOLO inference from the WebRTC streaming path
-    so that recv() can return frames at full FPS without blocking on inference.
-    Detection runs at ~DETECTION_INTERVAL Hz; frames are captured as fast as the
-    camera provides them.
+    Runs independently of YOLO inference so that latest_frame stays fresh
+    even while the detection thread is blocked on a slow inference call.
     """
-    global latest_frame, last_detections, last_multi_detection
+    global latest_frame
 
-    last_detection_time = 0
-    last_log_time = 0
-    prev_detection_count = -1
-
-    print("✓ Background capture+detection thread started")
+    print("✓ Background capture thread started")
 
     while True:
         try:
@@ -181,64 +175,93 @@ def background_capture_and_detect():
                 time.sleep(0.1)
                 continue
 
-            # Capture frame (blocks until camera delivers one — natural pacing)
+            # capture_array() blocks until camera delivers a frame — natural pacing at camera FPS
             with camera_lock:
                 frame = camera.capture_array()
             frame = normalize_frame(frame)
             frame = cv2.flip(frame, 0)
 
-            # Store latest frame for WebRTC streaming
             with latest_frame_lock:
                 latest_frame = frame
 
-            # Run YOLO at a throttled rate to keep CPU headroom for encoding
+        except Exception as e:
+            print(f"⚠ Capture error: {e}")
+            time.sleep(0.1)
+
+
+def background_detect():
+    """Detection thread: run YOLO on the latest frame at a throttled rate.
+
+    Reads from latest_frame (updated by the capture thread) so inference
+    never blocks camera capture.  Results are cached for recv() to draw
+    and published via ZMQ for servotest.
+    """
+    global last_detections, last_multi_detection
+
+    last_log_time = 0
+    prev_detection_count = -1
+
+    print("✓ Background detection thread started")
+
+    while True:
+        try:
+            # Grab the most recent frame from the capture thread
+            with latest_frame_lock:
+                frame = latest_frame.copy() if latest_frame is not None else None
+
+            if frame is None or yolo_model is None:
+                time.sleep(0.1)
+                continue
+
+            detection_boxes = run_detection(frame)
+            is_defective = check_defective(detection_boxes)
+
+            with detection_cache_lock:
+                last_detections = detection_boxes
+                last_multi_detection = len(detection_boxes) > 1
+
+            # Publish via ZMQ for servotest
+            if detection_publisher is not None:
+                now = time.time()
+                detection_msg = {
+                    'detections': [
+                        {
+                            'x1': int(x1), 'y1': int(y1),
+                            'x2': int(x2), 'y2': int(y2),
+                            'confidence': float(conf),
+                            'class': str(cls_name) if cls_name else 'mango'
+                        }
+                        for x1, y1, x2, y2, conf, cls_name in detection_boxes
+                    ],
+                    'is_defective': is_defective,
+                    'multi_detection': len(detection_boxes) > 1,
+                    'timestamp': now
+                }
+                try:
+                    detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    pass
+
+            # Throttled logging: only on change or every 5 seconds
             now = time.time()
-            if yolo_model is not None and (now - last_detection_time) >= DETECTION_INTERVAL:
-                last_detection_time = now
+            current_count = len(detection_boxes)
+            if current_count != prev_detection_count or (now - last_log_time) >= 5.0:
+                if detection_boxes:
+                    print(f"🔍 YOLO detected {current_count} mango(es):")
+                    for x1, y1, x2, y2, conf, cls_name in detection_boxes:
+                        print(f"   - Class: {cls_name}, Confidence: {conf:.2f}")
+                elif (now - last_log_time) >= 5.0:
+                    print("⚪ No mangoes detected")
+                print(f"   📊 is_defective={is_defective}")
+                prev_detection_count = current_count
+                last_log_time = now
 
-                detection_boxes = run_detection(frame)
-                is_defective = check_defective(detection_boxes)
-
-                with detection_cache_lock:
-                    last_detections = detection_boxes
-                    last_multi_detection = len(detection_boxes) > 1
-
-                # Publish via ZMQ for servotest
-                if detection_publisher is not None:
-                    detection_msg = {
-                        'detections': [
-                            {
-                                'x1': int(x1), 'y1': int(y1),
-                                'x2': int(x2), 'y2': int(y2),
-                                'confidence': float(conf),
-                                'class': str(cls_name) if cls_name else 'mango'
-                            }
-                            for x1, y1, x2, y2, conf, cls_name in detection_boxes
-                        ],
-                        'is_defective': is_defective,
-                        'multi_detection': len(detection_boxes) > 1,
-                        'timestamp': now
-                    }
-                    try:
-                        detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
-                    except zmq.Again:
-                        pass
-
-                # Throttled logging: only on change or every 5 seconds
-                current_count = len(detection_boxes)
-                if current_count != prev_detection_count or (now - last_log_time) >= 5.0:
-                    if detection_boxes:
-                        print(f"🔍 YOLO detected {current_count} mango(es):")
-                        for x1, y1, x2, y2, conf, cls_name in detection_boxes:
-                            print(f"   - Class: {cls_name}, Confidence: {conf:.2f}")
-                    elif (now - last_log_time) >= 5.0:
-                        print("⚪ No mangoes detected")
-                    print(f"   📊 is_defective={is_defective}")
-                    prev_detection_count = current_count
-                    last_log_time = now
+            # Pace detection to avoid busy-looping (YOLO itself takes time,
+            # but this ensures a minimum interval between runs)
+            time.sleep(DETECTION_INTERVAL)
 
         except Exception as e:
-            print(f"⚠ Background capture error: {e}")
+            print(f"⚠ Detection error: {e}")
             time.sleep(0.5)
 
 
@@ -448,8 +471,11 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"⚠ Camera init failed: {e} — will stream black frames")
 
-    bg_thread = threading.Thread(target=background_capture_and_detect, daemon=True)
-    bg_thread.start()
+    cap_thread = threading.Thread(target=background_capture, daemon=True)
+    cap_thread.start()
+
+    det_thread = threading.Thread(target=background_detect, daemon=True)
+    det_thread.start()
 
     setup_event_loop()
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
