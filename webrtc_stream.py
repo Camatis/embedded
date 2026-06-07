@@ -66,6 +66,26 @@ last_detections = []
 last_multi_detection = False
 detection_cache_lock = threading.Lock()
 
+# YOLO model (loaded once at startup, shared across all connections)
+yolo_model = None
+
+def load_yolo_model():
+    """Load YOLO model globally at startup (only once)."""
+    global yolo_model
+    print("Loading YOLO model...")
+    try:
+        from ultralytics import YOLO
+        model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
+        if not os.path.exists(model_path):
+            print(f"⚠ YOLO model not found at {model_path}")
+            yolo_model = None
+        else:
+            yolo_model = YOLO(model_path)
+            print(f"✓ YOLO model loaded from {model_path}")
+    except Exception as e:
+        print(f"⚠ Failed to load YOLO model: {e}")
+        yolo_model = None
+
 def init_camera():
     global camera
     if camera is not None:
@@ -129,21 +149,6 @@ class CameraTrack(VideoStreamTrack):
         self.fps = fps
         self.frame_count = 0
         self.camera_available = False
-        
-        # Load YOLO model
-        print("Loading YOLO model...")
-        try:
-            from ultralytics import YOLO
-            model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
-            if not os.path.exists(model_path):
-                print(f"⚠ YOLO model not found at {model_path}")
-                self.yolo_model = None
-            else:
-                self.yolo_model = YOLO(model_path)
-                print(f"✓ YOLO model loaded from {model_path}")
-        except Exception as e:
-            print(f"⚠ Failed to load YOLO model: {e}")
-            self.yolo_model = None
 
         try:
             init_camera()
@@ -168,7 +173,7 @@ class CameraTrack(VideoStreamTrack):
                 frame = cv2.flip(frame, 0)
                 
                 # Run YOLO detection every 4 frames (~7.5 FPS at 30 FPS camera)
-                if (self.frame_count % 4) == 0 and self.yolo_model is not None:
+                if (self.frame_count % 4) == 0 and yolo_model is not None:
                     try:
                         detection_boxes = self._run_detection(frame)
                         is_defective = self._check_defective(detection_boxes)
@@ -228,11 +233,11 @@ class CameraTrack(VideoStreamTrack):
     
     def _run_detection(self, frame):
         """Run YOLO detection on frame."""
-        if self.yolo_model is None:
+        if yolo_model is None:
             return []
         
         try:
-            results = self.yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
+            results = yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
             detections = []
             
             if results and len(results) > 0:
@@ -246,8 +251,8 @@ class CameraTrack(VideoStreamTrack):
                         try:
                             if hasattr(box, 'cls') and box.cls is not None:
                                 cls_idx = int(box.cls[0])
-                                if hasattr(self.yolo_model, 'names'):
-                                    cls_name = self.yolo_model.names.get(cls_idx, str(cls_idx))
+                                if hasattr(yolo_model, 'names'):
+                                    cls_name = yolo_model.names.get(cls_idx, str(cls_idx))
                                 else:
                                     cls_name = str(cls_idx)
                         except Exception:
@@ -392,4 +397,5 @@ if __name__ == '__main__':
     print("Access endpoint: http://0.0.0.0:8082/offer")
     
     setup_event_loop()
+    load_yolo_model()  # Load YOLO model once at startup
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)

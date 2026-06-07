@@ -248,7 +248,7 @@ function Dashboard({ user, token, onLogout }) {
       console.log('Connecting to WebRTC stream at:', webrtcUrl);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
 
       const response = await fetch(webrtcUrl, {
         method: 'POST',
