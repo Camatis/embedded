@@ -310,11 +310,11 @@ def offer():
         # Schedule the async work on the global event loop and wait for result
         future = asyncio.run_coroutine_threadsafe(run(), loop)
         try:
-            local_desc = future.result(timeout=5)
+            local_desc = future.result(timeout=15)
             print(f"✓ Generated WebRTC answer")
             return jsonify({'success': True, 'sdp': local_desc.sdp, 'type': local_desc.type})
         except asyncio.TimeoutError:
-            print("❌ WebRTC answer generation timed out")
+            print("❌ WebRTC answer generation timed out (>15s)")
             return jsonify({'success': False, 'error': 'Answer generation timeout'}), 500
     except Exception as e:
         error_msg = str(e) if str(e) else type(e).__name__
