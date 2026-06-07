@@ -107,7 +107,7 @@ conveyor_pwm = GPIO.PWM(RPWM, 100)
 conveyor_pwm.start(0)
 
 # Smooth speed control for the belt motor
-CONVEYOR_SPEED = 56
+CONVEYOR_SPEED = 75
 CONVEYOR_RAMP_STEP = 5
 CONVEYOR_RAMP_DELAY = 0.05
 current_conveyor_speed = 0
