@@ -5,7 +5,7 @@ Captures frames and streams them via WebRTC to browser.
 YOLO detections are handled by yolo_detector_shared.py (shared with servotest).
 
 Usage:
-  pip install flask aiortc opencv-python av picamera2 ultralytics
+  pip install flask flask-cors aiortc opencv-python av picamera2 ultralytics
   python webrtc_stream.py
 
 Then from browser:
@@ -24,11 +24,13 @@ import os
 import zmq
 import json
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from av import VideoFrame
 from picamera2 import Picamera2
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"]}})
 pcs = set()
 
 # Global event loop for WebRTC connections
