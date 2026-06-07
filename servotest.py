@@ -524,6 +524,10 @@ def autonomous_sorting_loop():
                 # Get defect analysis from webrtc_stream (via ZMQ subscription)
                 # No need to capture our own image - webrtc_stream is already doing continuous detection
                 print("🧠 Checking defect status from camera detection...")
+                
+                # Give camera time to detect the mango (IR sensor triggers faster than camera frame processing)
+                time.sleep(0.5)  # Wait 500ms for webrtc_stream to see and process the mango
+                
                 is_defective = False
                 
                 # Wait up to 2 seconds for webrtc_stream to process and publish detection
