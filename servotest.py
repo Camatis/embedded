@@ -526,7 +526,7 @@ def autonomous_sorting_loop():
                 print("🧠 Checking defect status from camera detection...")
                 
                 # Give camera time to detect the mango (IR sensor triggers faster than camera frame processing)
-                time.sleep(0.5)  # Wait 500ms for webrtc_stream to see and process the mango
+                time.sleep(0.9)  # Wait 900ms for webrtc_stream to see and process the mango
                 
                 is_defective = False
                 
