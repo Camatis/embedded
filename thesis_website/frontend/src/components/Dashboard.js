@@ -208,17 +208,32 @@ function Dashboard({ user, token, onLogout }) {
         pcRef.current.close();
       }
 
-      const pc = new RTCPeerConnection();
+      // Add STUN servers for better NAT traversal on Raspberry Pi
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
+        ]
+      });
       pcRef.current = pc;
 
       pc.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', pc.iceConnectionState);
         setCameraStatus(pc.iceConnectionState);
       };
 
       pc.ontrack = (event) => {
+        console.log('Video track received');
         if (videoRef.current) {
           videoRef.current.srcObject = event.streams[0];
         }
+      };
+
+      pc.onerror = (error) => {
+        console.error('WebRTC connection error:', error);
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log('Connection state:', pc.connectionState);
       };
 
       pc.addTransceiver('video', { direction: 'recvonly' });
@@ -226,23 +241,45 @@ function Dashboard({ user, token, onLogout }) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const response = await fetch(`${BACKEND_URL}/api/webrtc-offer`, {
+      // Connect to WebRTC stream server on port 8082
+      const webrtcUrl = `${window.location.protocol}//${window.location.hostname}:8082/offer`;
+      console.log('Connecting to WebRTC stream at:', webrtcUrl);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      const response = await fetch(webrtcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'offer',
           sdp: offer.sdp
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const body = await response.text();
-        throw new Error(`WebRTC offer failed: ${response.status} ${body}`);
+        console.error('Server error response:', body);
+        throw new Error(`WebRTC server error: ${response.status}`);
       }
 
       const answer = await response.json();
-      await pc.setRemoteDescription(answer);
+      
+      if (!answer.success && answer.error) {
+        throw new Error(`WebRTC error: ${answer.error}`);
+      }
+
+      if (!answer.sdp || !answer.type) {
+        console.error('Invalid answer format:', answer);
+        throw new Error('Invalid WebRTC answer from server');
+      }
+
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
       setCameraStatus('Connected');
+      console.log('✓ WebRTC connection established');
     } catch (err) {
       console.error('WebRTC init failed:', err);
       setCameraError(err.message || 'Failed to connect camera stream');

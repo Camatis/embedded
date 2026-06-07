@@ -273,19 +273,21 @@ def offer():
     global loop
     if loop is None:
         print("❌ Event loop not initialized")
-        return jsonify({'error': 'Server not ready'}), 503
+        return jsonify({'success': False, 'error': 'Server not ready - event loop not initialized'}), 503
     
     # Set the global event loop as current for this request thread
     asyncio.set_event_loop(loop)
     
     data = request.get_json()
     if not data or 'sdp' not in data or 'type' not in data:
-        return jsonify({'error': 'Missing SDP offer'}), 400
+        return jsonify({'success': False, 'error': 'Missing SDP offer or type'}), 400
 
     try:
+        print(f"📡 Received WebRTC offer, processing...")
         offer_desc = RTCSessionDescription(sdp=data['sdp'], type=data['type'])
         pc = RTCPeerConnection()
         pcs.add(pc)
+        print(f"✓ Created PeerConnection")
 
         @pc.on('iceconnectionstatechange')
         def on_iceconnectionstatechange():
@@ -295,6 +297,7 @@ def offer():
 
         camera_track = CameraTrack(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS)
         pc.addTrack(camera_track)
+        print(f"✓ Added camera track")
 
         async def run():
             await pc.setRemoteDescription(offer_desc)
@@ -304,14 +307,19 @@ def offer():
 
         # Schedule the async work on the global event loop and wait for result
         future = asyncio.run_coroutine_threadsafe(run(), loop)
-        local_desc = future.result(timeout=5)
-
-        return jsonify({'sdp': local_desc.sdp, 'type': local_desc.type})
+        try:
+            local_desc = future.result(timeout=5)
+            print(f"✓ Generated WebRTC answer")
+            return jsonify({'success': True, 'sdp': local_desc.sdp, 'type': local_desc.type})
+        except asyncio.TimeoutError:
+            print("❌ WebRTC answer generation timed out")
+            return jsonify({'success': False, 'error': 'Answer generation timeout'}), 500
     except Exception as e:
-        print(f"❌ WebRTC offer error: {e}")
+        error_msg = str(e) if str(e) else type(e).__name__
+        print(f"❌ WebRTC offer error: {error_msg}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': error_msg}), 500
 
 
 @app.route('/status')
