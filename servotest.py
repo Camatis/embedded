@@ -175,6 +175,53 @@ def set_hopper(ticks):
     """Directly sets the hopper servo position via raw PCA9685 PWM ticks."""
     pca.channels[HOPPER_CHANNEL].duty_cycle = int(ticks * 65535 / 4096)
 
+def initial_startup_drop():
+    """
+    Priming sequence:
+    - Hopper rests at 180° (arm fully LEFT)
+    - Rotates to 0° (arm fully RIGHT) to give the first mango
+    - Resets back to 180° (bearing slips, won't pull mango back)
+    """
+    print("\n🚀 Priming Hopper: Rotating to 0° for First Mango...")
+    # Confirm at rest (180°) before sweeping
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # Sweep to 0° (arm fully RIGHT) to give first mango
+    set_hopper(HOPPER_0_TICK)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # Reset back to 180° (bearing slips)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✅ First mango loaded into chamber.]")
+
+def operate_stopper_and_hopper():
+    """
+    Pipeline sequence (runs in separate thread):
+    1. Open stopper → release scanned mango onto belt.
+    2. Close stopper.
+    3. Rotate hopper from 180° to 90° → drop next mango into chamber.
+    4. Reset hopper back to 180°.
+    """
+    print("   🔄 PIPELINE: Opening Stopper Gate...")
+    # 1. Open stopper
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(STOPPER_DELAY)
+    # 2. Close stopper
+    barrier_gate.angle = BARRIER_LOCKED
+    print("   [🚧 Stopper Gate locked]")
+    time.sleep(1.0)  # Let stopper fully close before hopper moves
+    # 3. Confirm hopper is at 180° rest before sweeping
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # 4. Rotate to 90° (arm CENTER) to push next mango into chamber
+    print("   🔄 Hopper rotating to 90°...")
+    set_hopper(HOPPER_90_TICK)
+    time.sleep(HOPPER_HALF_TRAVEL)
+    # 5. Reset back to 180° (bearing slips)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✅ Next mango loaded into chamber.]")
+
 print("Locking sorting gates to default positions...")
 barrier_gate.angle = BARRIER_LOCKED
 small_gate.angle = GATE_CLOSED
@@ -240,53 +287,6 @@ multi_detection_lock = threading.Lock()
 GPIO.output(R_EN, GPIO.HIGH)
 GPIO.output(L_EN, GPIO.HIGH)
 GPIO.output(LPWM, GPIO.LOW)
-
-def initial_startup_drop():
-    """
-    Priming sequence:
-    - Hopper rests at 180° (arm fully LEFT)
-    - Rotates to 0° (arm fully RIGHT) to give the first mango
-    - Resets back to 180° (bearing slips, won't pull mango back)
-    """
-    print("\n🚀 Priming Hopper: Rotating to 0° for First Mango...")
-    # Confirm at rest (180°) before sweeping
-    set_hopper(HOPPER_REST)
-    time.sleep(HOPPER_FULL_TRAVEL)
-    # Sweep to 0° (arm fully RIGHT) to give first mango
-    set_hopper(HOPPER_0_TICK)
-    time.sleep(HOPPER_FULL_TRAVEL)
-    # Reset back to 180° (bearing slips)
-    set_hopper(HOPPER_REST)
-    time.sleep(HOPPER_FULL_TRAVEL)
-    print("   [✅ First mango loaded into chamber.]")
-
-def operate_stopper_and_hopper():
-    """
-    Pipeline sequence (runs in separate thread):
-    1. Open stopper → release scanned mango onto belt.
-    2. Close stopper.
-    3. Rotate hopper from 180° to 90° → drop next mango into chamber.
-    4. Reset hopper back to 180°.
-    """
-    print("   🔄 PIPELINE: Opening Stopper Gate...")
-    # 1. Open stopper
-    barrier_gate.angle = BARRIER_RELEASED
-    time.sleep(STOPPER_DELAY)
-    # 2. Close stopper
-    barrier_gate.angle = BARRIER_LOCKED
-    print("   [🚧 Stopper Gate locked]")
-    time.sleep(1.0)  # Let stopper fully close before hopper moves
-    # 3. Confirm hopper is at 180° rest before sweeping
-    set_hopper(HOPPER_REST)
-    time.sleep(HOPPER_FULL_TRAVEL)
-    # 4. Rotate to 90° (arm CENTER) to push next mango into chamber
-    print("   🔄 Hopper rotating to 90°...")
-    set_hopper(HOPPER_90_TICK)
-    time.sleep(HOPPER_HALF_TRAVEL)
-    # 5. Reset back to 180° (bearing slips)
-    set_hopper(HOPPER_REST)
-    time.sleep(HOPPER_FULL_TRAVEL)
-    print("   [✅ Next mango loaded into chamber.]")
 
 # ==========================================
 # FLASK API ENDPOINTS
