@@ -178,6 +178,16 @@ class CameraTrack(VideoStreamTrack):
                         detection_boxes = self._run_detection(frame)
                         is_defective = self._check_defective(detection_boxes)
                         
+                        # DEBUG: Log detection details
+                        if detection_boxes:
+                            print(f"🔍 YOLO detected {len(detection_boxes)} mango(es):")
+                            for x1, y1, x2, y2, conf, cls_name in detection_boxes:
+                                print(f"   - Class: {cls_name}, Confidence: {conf:.2f}")
+                        else:
+                            print(f"⚪ No mangoes detected in frame")
+                        
+                        print(f"   📊 is_defective={is_defective}")
+                        
                         # Update detection cache for /api/detections endpoint
                         with detection_cache_lock:
                             global last_detections, last_multi_detection
