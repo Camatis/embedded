@@ -530,16 +530,18 @@ def autonomous_sorting_loop():
                     print("🧠 Checking defect status from camera detection...")
                     is_defective = False
                     
-                    # Wait up to 1 second for webrtc_stream to process and publish detection
+                    # Wait up to 2 seconds for webrtc_stream to process and publish detection
                     detection_received = False
                     retry_count = 0
-                    max_retries = 10  # 10 * 100ms = 1 second max wait
+                    max_retries = 20  # 20 * 100ms = 2 seconds max wait
                     
                     while not detection_received and retry_count < max_retries:
                         try:
                             if detection_subscriber is not None:
                                 try:
                                     detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
+                                    print(f"   📊 ZMQ received: {detection_data}")
+                                    
                                     with detection_lock:
                                         last_detection_data = detection_data
                                     
@@ -547,6 +549,8 @@ def autonomous_sorting_loop():
                                     is_defective = detection_data.get('is_defective', False)
                                     multi_detection = detection_data.get('multi_detection', False)
                                     detection_received = True
+                                    
+                                    print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}")
                                     
                                     if is_defective:
                                         print(f"🚨 Defective mango detected!")
@@ -558,6 +562,8 @@ def autonomous_sorting_loop():
                                 except zmq.Again:
                                     # No message yet, wait and retry
                                     retry_count += 1
+                                    if retry_count % 5 == 0:
+                                        print(f"   ⏳ Waiting for detection... ({retry_count*100}ms elapsed)")
                                     if retry_count < max_retries:
                                         time.sleep(0.1)  # Wait 100ms before retrying
                             else:
@@ -566,6 +572,9 @@ def autonomous_sorting_loop():
                         except Exception as e:
                             print(f"⚠️ Detection error: {e}, assuming Good")
                             detection_received = True
+                    
+                    if not detection_received:
+                        print(f"⚠️ Detection timeout after {retry_count*100}ms, using last known result or assuming Good")
                 
                 except subprocess.TimeoutExpired:
                     print(f"⚠️ Camera timeout: rpicam-jpeg took too long. Assuming mango is Good.")
