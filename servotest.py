@@ -529,43 +529,46 @@ def autonomous_sorting_loop():
                     # 2. Get defect analysis from webrtc_stream (via ZMQ subscription)
                     print("🧠 Checking defect status from camera detection...")
                     is_defective = False
-                
-                # Wait up to 1 second for webrtc_stream to process and publish detection
-                detection_received = False
-                retry_count = 0
-                max_retries = 10  # 10 * 100ms = 1 second max wait
-                
-                while not detection_received and retry_count < max_retries:
-                    try:
-                        if detection_subscriber is not None:
-                            try:
-                                detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
-                                with detection_lock:
-                                    last_detection_data = detection_data
-                                
-                                # Check if defective
-                                is_defective = detection_data.get('is_defective', False)
-                                multi_detection = detection_data.get('multi_detection', False)
+                    
+                    # Wait up to 1 second for webrtc_stream to process and publish detection
+                    detection_received = False
+                    retry_count = 0
+                    max_retries = 10  # 10 * 100ms = 1 second max wait
+                    
+                    while not detection_received and retry_count < max_retries:
+                        try:
+                            if detection_subscriber is not None:
+                                try:
+                                    detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
+                                    with detection_lock:
+                                        last_detection_data = detection_data
+                                    
+                                    # Check if defective
+                                    is_defective = detection_data.get('is_defective', False)
+                                    multi_detection = detection_data.get('multi_detection', False)
+                                    detection_received = True
+                                    
+                                    if is_defective:
+                                        print(f"🚨 Defective mango detected!")
+                                    if multi_detection:
+                                        print("⚠️ MULTIPLE MANGOES DETECTED!")
+                                        with multi_detection_lock:
+                                            global multi_detection_flag
+                                            multi_detection_flag = True
+                                except zmq.Again:
+                                    # No message yet, wait and retry
+                                    retry_count += 1
+                                    if retry_count < max_retries:
+                                        time.sleep(0.1)  # Wait 100ms before retrying
+                            else:
+                                print("⚠️ Detection service not available, assuming mango is Good")
                                 detection_received = True
-                                
-                                if is_defective:
-                                    print(f"🚨 Defective mango detected!")
-                                if multi_detection:
-                                    print("⚠️ MULTIPLE MANGOES DETECTED!")
-                                    with multi_detection_lock:
-                                        global multi_detection_flag
-                                        multi_detection_flag = True
-                            except zmq.Again:
-                                # No message yet, wait and retry
-                                retry_count += 1
-                                if retry_count < max_retries:
-                                    time.sleep(0.1)  # Wait 100ms before retrying
-                        else:
-                            print("⚠️ Detection service not available, assuming mango is Good")
+                        except Exception as e:
+                            print(f"⚠️ Detection error: {e}, assuming Good")
                             detection_received = True
-                    except Exception as e:
-                        print(f"⚠️ Detection error: {e}, assuming Good")
-                        detection_received = True
+                
+                except subprocess.TimeoutExpired:
+                    print(f"⚠️ Camera timeout: rpicam-jpeg took too long. Assuming mango is Good.")
                 except Exception as e:
                     print(f"⚠️ Camera error: Could not grab frame. Assuming mango is Good. Details: {e}")
 
