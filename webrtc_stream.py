@@ -172,9 +172,9 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
                 
-                # Run YOLO detection every 2 frames (~15 FPS detection at 30 FPS camera)
-                # Balances detection responsiveness with smooth video streaming
-                if (self.frame_count % 2) == 0 and yolo_model is not None:
+                # Run YOLO detection on every frame for reliable defect detection
+                # Better real-time responsiveness for camera-based routing
+                if yolo_model is not None:
                     try:
                         detection_boxes = self._run_detection(frame)
                         is_defective = self._check_defective(detection_boxes)

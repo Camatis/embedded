@@ -531,6 +531,7 @@ def autonomous_sorting_loop():
                 is_defective = False
                 
                 # Wait up to 2 seconds for webrtc_stream to process and publish detection
+                # Keep polling for a non-empty detection (first one wins)
                 detection_received = False
                 retry_count = 0
                 max_retries = 20  # 20 * 100ms = 2 seconds max wait
@@ -548,9 +549,12 @@ def autonomous_sorting_loop():
                                 # Check if defective
                                 is_defective = detection_data.get('is_defective', False)
                                 multi_detection = detection_data.get('multi_detection', False)
+                                detections_list = detection_data.get('detections', [])
+                                
+                                # Accept this detection result (empty or not) - this is the latest
                                 detection_received = True
                                 
-                                print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}")
+                                print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}, detections_count={len(detections_list)}")
                                 
                                 if is_defective:
                                     print(f"🚨 Defective mango detected!")
