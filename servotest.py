@@ -497,6 +497,7 @@ print("="*45)
 def autonomous_sorting_loop():
     """Main sorting loop running in background thread"""
     global sorting_active, sorting_paused, count_small, count_medium, count_large, count_defective, count_total, last_mango
+    global last_detection_data, multi_detection_flag
     last_state = None
     
     while True:
@@ -528,57 +529,74 @@ def autonomous_sorting_loop():
                 # Give camera time to detect the mango (IR sensor triggers faster than camera frame processing)
                 time.sleep(0.9)  # Wait 900ms for webrtc_stream to see and process the mango
                 
-                is_defective = False
-                
-                # Wait up to 2 seconds for webrtc_stream to process and publish detection
-                # Keep polling for a non-empty detection (first one wins)
+                multi_detection = False
+
+                # Wait up to 2 seconds for webrtc_stream to process and publish detection.
+                #
+                # IMPORTANT: both ZMQ sockets use HWM=1 and webrtc_stream publishes a
+                # verdict every frame, but this loop only reads ZMQ for a brief window when
+                # the IR sensor fires. When the queues fill, ZMQ PUB drops the *new* messages
+                # and keeps the old one, so the first buffered message is STALE (often from
+                # when the belt was empty or showed the previous mango). Taking that first
+                # message made defective mangoes get routed as Good.
+                #
+                # Fix: each iteration, DRAIN the socket to the most recent message, and keep
+                # polling until we see a current (non-empty) detection. Reading frequently
+                # flushes the stale message so the publisher's fresh per-frame verdicts come
+                # through and reflect the mango actually in the chamber.
                 detection_received = False
+                latest_detection = None
                 retry_count = 0
                 max_retries = 20  # 20 * 100ms = 2 seconds max wait
-                
-                while not detection_received and retry_count < max_retries:
-                    try:
-                        if detection_subscriber is not None:
+
+                if detection_subscriber is None:
+                    print("⚠️ Detection service not available, assuming mango is Good")
+                else:
+                    while retry_count < max_retries:
+                        # Drain all queued messages, keeping only the freshest one
+                        newest = None
+                        while True:
                             try:
-                                detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
-                                print(f"   📊 ZMQ received: {detection_data}")
-                                
-                                with detection_lock:
-                                    last_detection_data = detection_data
-                                
-                                # Check if defective
-                                is_defective = detection_data.get('is_defective', False)
-                                multi_detection = detection_data.get('multi_detection', False)
-                                detections_list = detection_data.get('detections', [])
-                                
-                                # Accept this detection result (empty or not) - this is the latest
-                                detection_received = True
-                                
-                                print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}, detections_count={len(detections_list)}")
-                                
-                                if is_defective:
-                                    print(f"🚨 Defective mango detected!")
-                                if multi_detection:
-                                    print("⚠️ MULTIPLE MANGOES DETECTED!")
-                                    with multi_detection_lock:
-                                        global multi_detection_flag
-                                        multi_detection_flag = True
+                                newest = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
                             except zmq.Again:
-                                # No message yet, wait and retry
-                                retry_count += 1
-                                if retry_count % 5 == 0:
-                                    print(f"   ⏳ Waiting for detection... ({retry_count*100}ms elapsed)")
-                                if retry_count < max_retries:
-                                    time.sleep(0.1)  # Wait 100ms before retrying
-                        else:
-                            print("⚠️ Detection service not available, assuming mango is Good")
+                                break  # No more messages queued right now
+                            except Exception as e:
+                                print(f"⚠️ Detection error: {e}")
+                                break
+
+                        if newest is not None:
+                            latest_detection = newest
                             detection_received = True
-                    except Exception as e:
-                        print(f"⚠️ Detection error: {e}, assuming Good")
-                        detection_received = True
-                
+                            # A non-empty detection means the camera actually sees the mango
+                            # currently in the chamber -> use it and stop waiting.
+                            if newest.get('detections', []):
+                                break
+
+                        retry_count += 1
+                        if retry_count % 5 == 0:
+                            print(f"   ⏳ Waiting for fresh detection... ({retry_count*100}ms elapsed)")
+                        time.sleep(0.1)  # Wait 100ms before draining again
+
+                if latest_detection is not None:
+                    print(f"   📊 ZMQ latest: {latest_detection}")
+                    with detection_lock:
+                        last_detection_data = latest_detection
+
+                    is_defective = latest_detection.get('is_defective', False)
+                    multi_detection = latest_detection.get('multi_detection', False)
+                    detections_list = latest_detection.get('detections', [])
+
+                    print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}, detections_count={len(detections_list)}")
+
+                    if is_defective:
+                        print(f"🚨 Defective mango detected!")
+                    if multi_detection:
+                        print("⚠️ MULTIPLE MANGOES DETECTED!")
+                        with multi_detection_lock:
+                            multi_detection_flag = True
+
                 if not detection_received:
-                    print(f"⚠️ Detection timeout after {retry_count*100}ms, using last known result or assuming Good")
+                    print(f"⚠️ Detection timeout after {retry_count*100}ms, assuming Good")
 
                 # 3. Hardware Size Scan
                 print(f"📐 Scanning physical size for {SCAN_DELAY} seconds...")
