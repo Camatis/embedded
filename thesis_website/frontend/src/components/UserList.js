@@ -3,7 +3,7 @@ import React from 'react';
 function UserList({ users, onUserDeleted }) {
   const handleDelete = async (id) => {
     try {
-      const response = await fetch(`http://localhost:5000/api/users/${id}`, {
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:5000/api/users/${id}`, {
         method: 'DELETE',
       });
       

@@ -242,9 +242,8 @@ function Dashboard({ user, token, onLogout }) {
       await pc.setLocalDescription(offer);
 
       // Connect to WebRTC stream server on port 8082
-      // Use Pi's network IP address (not localhost, since frontend runs on different machine)
-      const piIp = '192.168.1.34';
-      const webrtcUrl = `${window.location.protocol}//${piIp}:8082/offer`;
+      // Derive Pi IP from the current page URL so it works on any network
+      const webrtcUrl = `${window.location.protocol}//${window.location.hostname}:8082/offer`;
       console.log('Connecting to WebRTC stream at:', webrtcUrl);
 
       const controller = new AbortController();
