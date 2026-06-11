@@ -519,6 +519,10 @@ def autonomous_sorting_loop():
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
                 
+                # 1. STOP BELT IMMEDIATELY
+                print("🛑 STOPPING BELT...")
+                set_conveyor_speed(0)
+                
                 is_defective = False
                 
                 # Get defect analysis from webrtc_stream (via ZMQ subscription)
@@ -597,6 +601,10 @@ def autonomous_sorting_loop():
 
                 # 4. Fire off the stopper and hopper thread for every mango
                 threading.Thread(target=operate_stopper_and_hopper).start() 
+                
+                # 4b. START BELT AGAIN (mango now falls onto running belt)
+                print("▶️  STARTING BELT...")
+                set_conveyor_speed(CONVEYOR_SPEED)
                 
                 # 5. Routing & Counting Logic
                 count_total += 1
