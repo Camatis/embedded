@@ -580,16 +580,20 @@ def autonomous_sorting_loop():
                 if not detection_received:
                     print(f"⚠️ Detection timeout after {retry_count*100}ms, using last known result or assuming Good")
 
-                # 3. Hardware Size Scan
-                print(f"📐 Scanning physical size for {SCAN_DELAY} seconds...")
-                detected_size = "SMALL" 
-                end_time = time.time() + SCAN_DELAY
-                while time.time() < end_time:
-                    if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
-                        detected_size = "LARGE"
-                    elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
-                        detected_size = "MEDIUM"
-                    time.sleep(0.01) 
+                # 3. Hardware Size Scan (ONLY if NOT defective)
+                if is_defective:
+                    print("⏭️  SKIPPING size scan - mango is defective")
+                    detected_size = None  # Not needed for reject route
+                else:
+                    print(f"📐 Scanning physical size for {SCAN_DELAY} seconds...")
+                    detected_size = "SMALL" 
+                    end_time = time.time() + SCAN_DELAY
+                    while time.time() < end_time:
+                        if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
+                            detected_size = "LARGE"
+                        elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
+                            detected_size = "MEDIUM"
+                        time.sleep(0.01)
 
                 # 4. Fire off the stopper and hopper thread for every mango
                 threading.Thread(target=operate_stopper_and_hopper).start() 
