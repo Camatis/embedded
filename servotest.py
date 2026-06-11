@@ -515,6 +515,11 @@ def autonomous_sorting_loop():
             if not sorting_active:
                 time.sleep(0.1)
                 continue
+            
+            # DEBUG: Check sensor reading every 500ms
+            if int(time.time() * 2) % 10 == 0:  # Every 500ms
+                trigger_state = GPIO.input(IR_TRIGGER_PIN)
+                print(f"   🔍 [DEBUG] IR_TRIGGER_PIN state: {trigger_state} (LOW={GPIO.LOW}, HIGH={GPIO.HIGH})")
                 
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
