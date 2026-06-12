@@ -254,7 +254,7 @@ function Dashboard({ user, token, onLogout }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'offer',
+          type: 'offer',q
           sdp: offer.sdp
         }),
         signal: controller.signal

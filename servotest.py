@@ -243,13 +243,12 @@ detection_lock = threading.Lock()
 # ==========================================
 # 2. TIMING VARIABLES 
 # ==========================================
-SCAN_DELAY = 2.0      
-TIME_TO_MEDIUM = 0.8  
-TIME_TO_LARGE = 2.2   
-SMALL_DROP_TIME = 2.0
-MEDIUM_DROP_TIME = 2.3 
-LARGE_DROP_TIME = 3.5  
-STOPPER_DELAY = 1.5 
+CAMERA_SCAN_DELAY = 2.0    # Belt stopped: Camera scans mango for defect (2 sec)
+SIZE_SCAN_DURATION = 3.0   # Belt running: Size sensors scan mango (3 sec)
+SMALL_DROP_TIME = 2.0      # Time gate stays open for small mango to drop
+MEDIUM_DROP_TIME = 2.3     # Time gate stays open for medium mango to drop
+LARGE_DROP_TIME = 3.5      # Time gate stays open for large mango to drop
+STOPPER_DELAY = 1.5        # Time to fully open/close stopper gate 
 
 # ==========================================
 # 3. LIVE COUNTERS & STATE
@@ -437,52 +436,120 @@ def get_detection_status():
         'multi_detection': flag
     })
 
-def operate_stopper():
-    """Release stopper only (hopper managed separately)."""
+def operate_stopper_release():
+    """
+    Release stopper gate to allow mango to exit.
+    Used for both defective and good mangoes after routing is determined.
+    """
+    print("   🔄 OPENING STOPPER GATE...")
     barrier_gate.angle = BARRIER_RELEASED
     time.sleep(STOPPER_DELAY)
     barrier_gate.angle = BARRIER_LOCKED
-    print("   [Stopper Locked]")
+    print("   [✓ Stopper Locked]")
+
+def operate_hopper_cycle():
+    """
+    Single hopper cycle: Rotate from 180° to 90° and back.
+    Loads the next mango into the chamber.
+    Called after each mango exits the chamber.
+    """
+    print("   🔄 HOPPER: Rotating to load next mango...")
+    # Confirm hopper is at 180° rest before sweeping
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    # Rotate to 90° (arm CENTER) to push next mango into chamber
+    set_hopper(HOPPER_90_TICK)
+    time.sleep(HOPPER_HALF_TRAVEL)
+    # Reset back to 180° (bearing slips)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✓ Next mango loaded into chamber]")
+
+def route_defective():
+    """
+    DEFECTIVE ROUTE:
+    1. Stopper opens immediately (belt already running)
+    2. Mango travels on belt without any size gates opening (rejected)
+    3. Wait for mango to clear, then cycle hopper for next batch
+    """
+    print("   🚨 DEFECTIVE ROUTE: Opening stopper, rejecting mango...")
+    operate_stopper_release()
+    
+    # Wait for defective mango to travel to reject bin
+    # (approximately the time for largest mango to travel)
+    print("   ⏳ Waiting for defective mango to clear...")
+    time.sleep(LARGE_DROP_TIME)
+    
+    # Cycle hopper to load next mango
+    operate_hopper_cycle()
+    print("   [✓ Defective rejection complete]")
 
 def route_small():
-    global gate_states
-    print("   [Small Gate Opened]")
+    """
+    GOOD + SMALL ROUTE:
+    1. Stopper already opened
+    2. Open small gate for mango to drop
+    3. Close gate after drop time
+    4. Cycle hopper for next batch
+    """
+    print("   🎯 SMALL ROUTE: Opening small gate...")
     small_gate.angle = GATE_OPEN
     gate_states['small'] = 'open'
     time.sleep(SMALL_DROP_TIME) 
     small_gate.angle = GATE_CLOSED
     gate_states['small'] = 'closed'
-    print("   [Small Gate Closed]")
+    print("   [✓ Small gate closed]")
+    
+    # Cycle hopper to load next mango
+    operate_hopper_cycle()
 
 def route_medium():
-    global gate_states
-    time.sleep(TIME_TO_MEDIUM)
-    print("   [Medium Gate Opened]")
+    """
+    GOOD + MEDIUM ROUTE:
+    1. Stopper already opened
+    2. Wait for mango to travel to medium bin position
+    3. Open medium gate for mango to drop
+    4. Close gate after drop time
+    5. Cycle hopper for next batch
+    """
+    # Small bin comes first, so wait before medium gate
+    print("   🎯 MEDIUM ROUTE: Waiting for belt position...")
+    time.sleep(0.8)  # Time for mango to pass small bin
+    
+    print("   🎯 Opening medium gate...")
     medium_gate.angle = GATE_OPEN
     gate_states['medium'] = 'open'
     time.sleep(MEDIUM_DROP_TIME) 
     medium_gate.angle = GATE_CLOSED
     gate_states['medium'] = 'closed'
-    print("   [Medium Gate Closed]")
+    print("   [✓ Medium gate closed]")
+    
+    # Cycle hopper to load next mango
+    operate_hopper_cycle()
 
 def route_large():
-    global gate_states
-    time.sleep(TIME_TO_LARGE)
-    print("   [Large Gate Opened]")
+    """
+    GOOD + LARGE ROUTE:
+    1. Stopper already opened
+    2. Wait for mango to travel to large bin position
+    3. Open large gate for mango to drop
+    4. Close gate after drop time
+    5. Cycle hopper for next batch
+    """
+    # Small and medium bins come first, so wait before large gate
+    print("   🎯 LARGE ROUTE: Waiting for belt position...")
+    time.sleep(2.2)  # Time for mango to pass small and medium bins
+    
+    print("   🎯 Opening large gate...")
     large_gate.angle = GATE_OPEN
     gate_states['large'] = 'open'
     time.sleep(LARGE_DROP_TIME) 
     large_gate.angle = GATE_CLOSED
     gate_states['large'] = 'closed'
-    print("   [Large Gate Closed]")
-
-def route_defective():
-    """Reject defective mango - no gates open, stays on belt for travel time"""
-    print("   [Defective Mango Rejected - No Gates Opening]")
-    print("   ⏳ Mango will travel on belt for rejection...")
-    # Wait for the time it would take for a large mango to travel (longest route)
-    time.sleep(TIME_TO_LARGE + LARGE_DROP_TIME)
-    print("   [✅ Defective mango rejection complete]")
+    print("   [✓ Large gate closed]")
+    
+    # Cycle hopper to load next mango
+    operate_hopper_cycle()
 
 # ==========================================
 # 5. MAIN AUTONOMOUS SENSOR LOOP
@@ -495,7 +562,25 @@ print("Press Ctrl+C to cleanly shut down motors.")
 print("="*45)
 
 def autonomous_sorting_loop():
-    """Main sorting loop running in background thread"""
+    """
+    Main autonomous sorting loop (runs in background thread).
+    
+    Two-phase workflow:
+    PHASE 1 - Detection (Belt Stopped):
+      1. Mango detected at trigger sensor
+      2. Belt stops, stopper gate stays locked
+      3. Camera scans for 2 seconds to check defect status
+    
+    PHASE 2 - Routing (Belt Running):
+      If DEFECTIVE:
+        - Belt starts, stopper opens immediately
+        - Mango travels to reject bin (no gates open)
+      
+      If GOOD:
+        - Belt starts, stopper stays locked
+        - Size sensors scan for 3 seconds while belt runs
+        - Stopper opens, mango routes to size-specific bin
+    """
     global sorting_active, sorting_paused, count_small, count_medium, count_large, count_defective, count_total, last_mango
     last_state = None
     
@@ -516,31 +601,27 @@ def autonomous_sorting_loop():
                 time.sleep(0.1)
                 continue
             
-            # DEBUG: Check sensor reading every 500ms
-            if int(time.time() * 2) % 10 == 0:  # Every 500ms
-                trigger_state = GPIO.input(IR_TRIGGER_PIN)
-                print(f"   🔍 [DEBUG] IR_TRIGGER_PIN state: {trigger_state} (LOW={GPIO.LOW}, HIGH={GPIO.HIGH})")
-                
+            # ═══════════════════════════════════════════════════════════════
+            # PHASE 1: DETECTION (Mango in Chamber, Belt Stopped)
+            # ═══════════════════════════════════════════════════════════════
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
                 
-                # 1. STOP BELT IMMEDIATELY
+                # 1a. STOP BELT IMMEDIATELY
                 print("🛑 STOPPING BELT...")
                 set_conveyor_speed(0)
+                # Stopper gate is already LOCKED (default state)
+                print("   [✓ Stopper gate locked]")
                 
+                # 1b. WAIT FOR CAMERA TO PROCESS
+                print(f"🧠 Camera scanning for {CAMERA_SCAN_DELAY} seconds...")
+                time.sleep(CAMERA_SCAN_DELAY)
+                
+                # 1c. GET DEFECT STATUS from ZMQ detection
                 is_defective = False
+                detected_size = "SMALL"  # Default fallback
                 
-                # Get defect analysis from webrtc_stream (via ZMQ subscription)
-                # No need to capture our own image - webrtc_stream is already doing continuous detection
-                print("🧠 Checking defect status from camera detection...")
-                
-                # Give camera time to detect the mango (IR sensor triggers faster than camera frame processing)
-                time.sleep(0.9)  # Wait 900ms for webrtc_stream to see and process the mango
-                
-                is_defective = False
-                
-                # Wait up to 2 seconds for webrtc_stream to process and publish detection
-                # Keep polling for a non-empty detection (first one wins)
+                # Poll ZMQ for detection result (up to 2 seconds)
                 detection_received = False
                 retry_count = 0
                 max_retries = 20  # 20 * 100ms = 2 seconds max wait
@@ -555,18 +636,17 @@ def autonomous_sorting_loop():
                                 with detection_lock:
                                     last_detection_data = detection_data
                                 
-                                # Check if defective
+                                # Extract defect status and multi-mango flag
                                 is_defective = detection_data.get('is_defective', False)
                                 multi_detection = detection_data.get('multi_detection', False)
                                 detections_list = detection_data.get('detections', [])
                                 
-                                # Accept this detection result (empty or not) - this is the latest
                                 detection_received = True
                                 
                                 print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}, detections_count={len(detections_list)}")
                                 
                                 if is_defective:
-                                    print(f"🚨 Defective mango detected!")
+                                    print(f"🚨 DEFECTIVE mango detected!")
                                 if multi_detection:
                                     print("⚠️ MULTIPLE MANGOES DETECTED!")
                                     with multi_detection_lock:
@@ -578,85 +658,106 @@ def autonomous_sorting_loop():
                                 if retry_count % 5 == 0:
                                     print(f"   ⏳ Waiting for detection... ({retry_count*100}ms elapsed)")
                                 if retry_count < max_retries:
-                                    time.sleep(0.1)  # Wait 100ms before retrying
+                                    time.sleep(0.1)
                         else:
-                            print("⚠️ Detection service not available, assuming mango is Good")
+                            print("⚠️ Detection service not available, assuming GOOD")
                             detection_received = True
                     except Exception as e:
-                        print(f"⚠️ Detection error: {e}, assuming Good")
+                        print(f"⚠️ Detection error: {e}, assuming GOOD")
                         detection_received = True
                 
                 if not detection_received:
-                    print(f"⚠️ Detection timeout after {retry_count*100}ms, using last known result or assuming Good")
-
-                # 3. Hardware Size Scan (ONLY if NOT defective)
+                    print(f"⚠️ Detection timeout after {retry_count*100}ms, assuming GOOD")
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PHASE 2: ROUTING (Mango on Belt, Different Logic per Type)
+                # ═══════════════════════════════════════════════════════════════
+                
+                # 2a. UPDATE COUNTS
+                count_total += 1
+                
+                # 2b. START BELT
+                print("▶️  STARTING BELT...")
+                set_conveyor_speed(CONVEYOR_SPEED)
+                
                 if is_defective:
-                    print("⏭️  SKIPPING size scan - mango is defective")
-                    detected_size = None  # Not needed for reject route
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    # ROUTE: DEFECTIVE
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    print("🎯 DECISION: DEFECTIVE → Opening stopper immediately")
+                    count_defective += 1
+                    
+                    # Fire stopper and route in background thread
+                    threading.Thread(target=operate_stopper_release).start()
+                    threading.Thread(target=route_defective).start()
+                    
                 else:
-                    print(f"📐 Scanning physical size for {SCAN_DELAY} seconds...")
-                    detected_size = "SMALL" 
-                    end_time = time.time() + SCAN_DELAY
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    # ROUTE: GOOD (Size Scan Phase)
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    print(f"🧠 GOOD mango → Scanning size for {SIZE_SCAN_DURATION} seconds (belt running, stopper locked)...")
+                    
+                    # Scan size sensors while belt is running and mango is on belt
+                    # Start with SMALL as default
+                    detected_size = "SMALL"
+                    end_time = time.time() + SIZE_SCAN_DURATION
+                    
                     while time.time() < end_time:
+                        # Priority: LARGE > MEDIUM > SMALL (most restrictive wins)
                         if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
                             detected_size = "LARGE"
                         elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
                             detected_size = "MEDIUM"
                         time.sleep(0.01)
-
-                # 4. Fire off the stopper and hopper thread for every mango
-                threading.Thread(target=operate_stopper_and_hopper).start() 
-                
-                # 4b. START BELT AGAIN (mango now falls onto running belt)
-                print("▶️  STARTING BELT...")
-                set_conveyor_speed(CONVEYOR_SPEED)
-                
-                # 5. Routing & Counting Logic
-                count_total += 1
-                
-                if is_defective:
-                    print("🎯 DECISION: Mango is DEFECTIVE. Routing to reject bin.")
-                    count_defective += 1
-                    threading.Thread(target=route_defective).start()
                     
-                else:
-                    print(f"🎯 DECISION: Mango is Good. Classified as {detected_size}.")
+                    print(f"📏 Size scan complete → Detected: {detected_size}")
+                    print(f"🎯 DECISION: GOOD + {detected_size}")
+                    
+                    # Update size-specific count
                     if detected_size == "SMALL":
                         count_small += 1
-                        threading.Thread(target=route_small).start()
                     elif detected_size == "MEDIUM":
                         count_medium += 1
-                        threading.Thread(target=route_medium).start()
                     elif detected_size == "LARGE":
                         count_large += 1
+                    
+                    # Now open stopper and route based on size
+                    # All these operations happen in parallel threads
+                    threading.Thread(target=operate_stopper_release).start()
+                    
+                    if detected_size == "SMALL":
+                        threading.Thread(target=route_small).start()
+                    elif detected_size == "MEDIUM":
+                        threading.Thread(target=route_medium).start()
+                    elif detected_size == "LARGE":
                         threading.Thread(target=route_large).start()
                 
-                # Update last mango
+                # Update last mango status
                 last_mango = {
-                    "size": detected_size,
+                    "size": detected_size if not is_defective else None,
                     "health": "DEFECTIVE" if is_defective else "GOOD",
                     "timestamp": datetime.now().isoformat()
                 }
                 
-                # 6. Live Dashboard Print
-                print("-" * 50)
+                # Print live stats
+                print("-" * 60)
                 print(f"📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}")
-                print("-" * 50)
+                print("-" * 60)
                 
-                # 7. Phantom Mango Fix
-                print("⏳ Waiting for the tail-end of the mango to clear the trigger...")
+                # 2c. CLEAR CHAMBER FOR NEXT BATCH
+                print("⏳ Waiting for mango tail to clear trigger sensor...")
                 while GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                     time.sleep(0.05) 
-                time.sleep(0.2) # Debounce buffer
+                time.sleep(0.2)  # Debounce buffer
                 
-                print("✅ Chamber clear. Ready for the next mango.")
+                print("✅ Chamber clear. Ready for next mango.\n")
 
             time.sleep(0.01)
         except Exception as e:
             print(f"❌ ERROR in sorting loop: {e}")
             import traceback
             traceback.print_exc()
-            time.sleep(1)  # Prevent spam if error keeps happening
+            time.sleep(1)
 
 # Initialize ZMQ detection subscriber (listening to webrtc_stream)
 try:
