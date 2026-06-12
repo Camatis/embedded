@@ -462,10 +462,7 @@ if __name__ == '__main__':
     
     setup_event_loop()
     load_tflite_model()  # Load TFLite model once at startup
-r error: {error_msg}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': error_msg}), 500
+    app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
 
 
 @app.route('/status')
