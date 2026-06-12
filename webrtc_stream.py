@@ -92,6 +92,8 @@ def load_tflite_model():
             print(f"  Output tensors: {len(tflite_output_details)}")
     except Exception as e:
         print(f"⚠ Failed to load TFLite model: {e}")
+        import traceback
+        traceback.print_exc()
         tflite_interpreter = None
 
 def init_camera():
@@ -258,18 +260,21 @@ class CameraTrack(VideoStreamTrack):
             return []
         
         try:
+            # Convert BGR to RGB if needed
+            if frame.shape[2] == 3:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                frame_rgb = frame
+            
             # Prepare input: resize and normalize
             input_shape = tflite_input_details[0]['shape']
             img_h, img_w = int(input_shape[1]), int(input_shape[2])
-            frame_resized = cv2.resize(frame, (img_w, img_h))
+            frame_resized = cv2.resize(frame_rgb, (img_w, img_h))
             
-            # Normalize to [0, 1] or [-1, 1] based on model input type
+            # Normalize to [0, 1] based on model input type
             input_dtype = tflite_input_details[0]['dtype']
             if input_dtype == np.float32:
                 frame_normalized = frame_resized.astype(np.float32) / 255.0
-                # Some models expect [-1, 1] instead of [0, 1]
-                # Uncomment below if your model needs [-1, 1] normalization:
-                # frame_normalized = (frame_resized.astype(np.float32) / 127.5) - 1.0
             else:
                 frame_normalized = frame_resized.astype(input_dtype)
             
@@ -284,35 +289,37 @@ class CameraTrack(VideoStreamTrack):
             detections = []
             output_data = tflite_interpreter.get_tensor(tflite_output_details[0]['index'])
             
-            # Parse TFLite output (typical YOLO format: [batch, anchors, (x, y, w, h, conf, class_probs)...])
-            # Adjust parsing based on your model's output format
+            # Parse TFLite output - handle multiple possible output shapes
             confidence_threshold = 0.6
             
-            # For standard YOLO output: shape is typically [1, num_detections, 6+num_classes]
-            if len(output_data.shape) == 3:  # [batch, detections, values]
+            # Try to parse detections from output
+            if len(output_data.shape) == 3 and output_data.shape[0] == 1:
+                # Shape: [1, num_detections, values]
                 for detection in output_data[0]:
-                    # Typical format: [x, y, w, h, objectness, class0, class1, ...]
-                    x, y, w, h = detection[:4]
-                    objectness = detection[4]
-                    
-                    if objectness < confidence_threshold:
+                    if len(detection) < 5:
                         continue
                     
-                    # Convert center coords to corner coords
+                    x, y, w, h = detection[:4]
+                    conf = detection[4] if len(detection) > 4 else 0.0
+                    
+                    if conf < confidence_threshold:
+                        continue
+                    
+                    # Convert center coords to corner coords (normalize to frame size)
                     x1 = max(0, int((x - w / 2) * self.width))
                     y1 = max(0, int((y - h / 2) * self.height))
                     x2 = min(self.width, int((x + w / 2) * self.width))
                     y2 = min(self.height, int((y + h / 2) * self.height))
                     
-                    # Get class (highest probability among classes)
-                    class_probs = detection[5:]
-                    if len(class_probs) > 0:
+                    # Get class if available
+                    cls_name = 'mango'
+                    if len(detection) > 5:
+                        class_probs = detection[5:]
                         cls_idx = int(np.argmax(class_probs))
-                        cls_conf = float(class_probs[cls_idx])
-                        # Map class index to name (adjust based on your model's classes)
                         cls_names = {0: 'good', 1: 'defective', 2: 'not defective'}
                         cls_name = cls_names.get(cls_idx, f'class_{cls_idx}')
-                        detections.append((x1, y1, x2, y2, objectness, cls_name))
+                    
+                    detections.append((x1, y1, x2, y2, float(conf), cls_name))
             
             return detections
         except Exception as e:
@@ -381,6 +388,81 @@ def offer():
     except Exception as e:
         error_msg = str(e) if str(e) else type(e).__name__
         print(f"❌ WebRTC offer error: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+
+@app.route('/status')
+def status():
+    return jsonify({
+        'stream_running': True,
+        'resolution': f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}",
+        'fps': CAMERA_FPS,
+        'detection_mode': 'embedded_yolo'
+    })
+
+
+@app.route('/detection', methods=['GET'])
+def detection():
+    """Return current detection status including multi-mango alerts."""
+    global last_detections, last_multi_detection
+    with detection_cache_lock:
+        return jsonify({
+            'multi_detection': last_multi_detection,
+            'detection_count': len(last_detections),
+            'detections': [
+                {'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2), 'confidence': float(conf), 'class': str(cls_name)}
+                for x1, y1, x2, y2, conf, cls_name in last_detections
+            ]
+        })
+
+
+@app.route('/api/detections', methods=['GET'])
+def get_detections():
+    """Return latest detection results for servotest to consume."""
+    global last_detections, last_multi_detection
+    with detection_cache_lock:
+        detections_formatted = []
+        for x1, y1, x2, y2, conf, cls_name in last_detections:
+            detections_formatted.append({
+                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'confidence': conf,
+                'class': cls_name
+            })
+        
+        return jsonify({
+            'detections': detections_formatted,
+            'count': len(detections_formatted),
+            'multi_detection': last_multi_detection,
+            'timestamp': time.time()
+        })
+
+
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({'message': 'RPi WebRTC camera stream running', 'endpoint': '/offer'})
+
+
+if __name__ == '__main__':
+    # Initialize ZMQ publisher for detection results
+    try:
+        zmq_context = zmq.Context()
+        detection_publisher = zmq_context.socket(zmq.PUB)
+        detection_publisher.setsockopt(zmq.SNDHWM, 1)  # Keep only latest message
+        detection_publisher.bind(f"tcp://127.0.0.1:{DETECTION_PORT}")
+        print(f"✓ ZMQ detection publisher started on tcp://127.0.0.1:{DETECTION_PORT}")
+        time.sleep(0.5)  # Give subscribers time to connect
+    except Exception as e:
+        print(f"⚠ Failed to initialize ZMQ: {e}")
+        detection_publisher = None
+    
+    print("Starting Mango Sorter WebRTC stream on port 8082...")
+    print("Access endpoint: http://0.0.0.0:8082/offer")
+    
+    setup_event_loop()
+    load_tflite_model()  # Load TFLite model once at startup
+r error: {error_msg}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': error_msg}), 500
