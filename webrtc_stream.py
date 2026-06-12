@@ -23,6 +23,7 @@ import sys
 import os
 import zmq
 import json
+import tensorflow as tf
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
@@ -66,25 +67,32 @@ last_detections = []
 last_multi_detection = False
 detection_cache_lock = threading.Lock()
 
-# YOLO model (loaded once at startup, shared across all connections)
-yolo_model = None
+# TFLite model (loaded once at startup, shared across all connections)
+tflite_interpreter = None
+tflite_input_details = None
+tflite_output_details = None
+tflite_model_path = None
 
-def load_yolo_model():
-    """Load YOLO model globally at startup (only once)."""
-    global yolo_model
-    print("Loading YOLO model...")
+def load_tflite_model():
+    """Load TFLite model globally at startup (only once)."""
+    global tflite_interpreter, tflite_input_details, tflite_output_details, tflite_model_path
+    print("Loading TFLite YOLO model...")
     try:
-        from ultralytics import YOLO
-        model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
-        if not os.path.exists(model_path):
-            print(f"⚠ YOLO model not found at {model_path}")
-            yolo_model = None
+        tflite_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.tflite'))
+        if not os.path.exists(tflite_model_path):
+            print(f"⚠ TFLite model not found at {tflite_model_path}")
+            tflite_interpreter = None
         else:
-            yolo_model = YOLO(model_path)
-            print(f"✓ YOLO model loaded from {model_path}")
+            tflite_interpreter = tf.lite.Interpreter(model_path=tflite_model_path)
+            tflite_interpreter.allocate_tensors()
+            tflite_input_details = tflite_interpreter.get_input_details()
+            tflite_output_details = tflite_interpreter.get_output_details()
+            print(f"✓ TFLite model loaded from {tflite_model_path}")
+            print(f"  Input shape: {tflite_input_details[0]['shape']}")
+            print(f"  Output tensors: {len(tflite_output_details)}")
     except Exception as e:
-        print(f"⚠ Failed to load YOLO model: {e}")
-        yolo_model = None
+        print(f"⚠ Failed to load TFLite model: {e}")
+        tflite_interpreter = None
 
 def init_camera():
     global camera
@@ -172,9 +180,9 @@ class CameraTrack(VideoStreamTrack):
                 frame = normalize_frame(frame)
                 frame = cv2.flip(frame, 0)
                 
-                # Run YOLO detection on every frame for reliable defect detection
+                # Run TFLite detection on every frame for reliable defect detection
                 # Better real-time responsiveness for camera-based routing
-                if yolo_model is not None:
+                if tflite_interpreter is not None:
                     try:
                         detection_boxes = self._run_detection(frame)
                         is_defective = self._check_defective(detection_boxes)
@@ -245,36 +253,72 @@ class CameraTrack(VideoStreamTrack):
             return video_frame
     
     def _run_detection(self, frame):
-        """Run YOLO detection on frame."""
-        if yolo_model is None:
+        """Run TFLite detection on frame."""
+        if tflite_interpreter is None:
             return []
         
         try:
-            results = yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
-            detections = []
+            # Prepare input: resize and normalize
+            input_shape = tflite_input_details[0]['shape']
+            img_h, img_w = int(input_shape[1]), int(input_shape[2])
+            frame_resized = cv2.resize(frame, (img_w, img_h))
             
-            if results and len(results) > 0:
-                result = results[0]
-                boxes = result.boxes
-                if boxes is not None and len(boxes) > 0:
-                    for box in boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        conf = float(box.conf[0])
-                        cls_name = None
-                        try:
-                            if hasattr(box, 'cls') and box.cls is not None:
-                                cls_idx = int(box.cls[0])
-                                if hasattr(yolo_model, 'names'):
-                                    cls_name = yolo_model.names.get(cls_idx, str(cls_idx))
-                                else:
-                                    cls_name = str(cls_idx)
-                        except Exception:
-                            pass
-                        detections.append((x1, y1, x2, y2, conf, cls_name))
+            # Normalize to [0, 1] or [-1, 1] based on model input type
+            input_dtype = tflite_input_details[0]['dtype']
+            if input_dtype == np.float32:
+                frame_normalized = frame_resized.astype(np.float32) / 255.0
+                # Some models expect [-1, 1] instead of [0, 1]
+                # Uncomment below if your model needs [-1, 1] normalization:
+                # frame_normalized = (frame_resized.astype(np.float32) / 127.5) - 1.0
+            else:
+                frame_normalized = frame_resized.astype(input_dtype)
+            
+            # Add batch dimension
+            input_data = np.expand_dims(frame_normalized, axis=0)
+            
+            # Set input and run inference
+            tflite_interpreter.set_tensor(tflite_input_details[0]['index'], input_data)
+            tflite_interpreter.invoke()
+            
+            # Get output
+            detections = []
+            output_data = tflite_interpreter.get_tensor(tflite_output_details[0]['index'])
+            
+            # Parse TFLite output (typical YOLO format: [batch, anchors, (x, y, w, h, conf, class_probs)...])
+            # Adjust parsing based on your model's output format
+            confidence_threshold = 0.6
+            
+            # For standard YOLO output: shape is typically [1, num_detections, 6+num_classes]
+            if len(output_data.shape) == 3:  # [batch, detections, values]
+                for detection in output_data[0]:
+                    # Typical format: [x, y, w, h, objectness, class0, class1, ...]
+                    x, y, w, h = detection[:4]
+                    objectness = detection[4]
+                    
+                    if objectness < confidence_threshold:
+                        continue
+                    
+                    # Convert center coords to corner coords
+                    x1 = max(0, int((x - w / 2) * self.width))
+                    y1 = max(0, int((y - h / 2) * self.height))
+                    x2 = min(self.width, int((x + w / 2) * self.width))
+                    y2 = min(self.height, int((y + h / 2) * self.height))
+                    
+                    # Get class (highest probability among classes)
+                    class_probs = detection[5:]
+                    if len(class_probs) > 0:
+                        cls_idx = int(np.argmax(class_probs))
+                        cls_conf = float(class_probs[cls_idx])
+                        # Map class index to name (adjust based on your model's classes)
+                        cls_names = {0: 'good', 1: 'defective', 2: 'not defective'}
+                        cls_name = cls_names.get(cls_idx, f'class_{cls_idx}')
+                        detections.append((x1, y1, x2, y2, objectness, cls_name))
             
             return detections
         except Exception as e:
-            print(f"⚠ YOLO inference error: {e}")
+            print(f"⚠ TFLite inference error: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def _check_defective(self, detection_boxes):
@@ -410,5 +454,5 @@ if __name__ == '__main__':
     print("Access endpoint: http://0.0.0.0:8082/offer")
     
     setup_event_loop()
-    load_yolo_model()  # Load YOLO model once at startup
+    load_tflite_model()  # Load TFLite model once at startup
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
