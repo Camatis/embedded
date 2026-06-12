@@ -52,9 +52,9 @@ def setup_event_loop():
 camera = None
 camera_lock = threading.Lock()
 
-CAMERA_WIDTH = 480
-CAMERA_HEIGHT = 360
-CAMERA_FPS = 30
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+CAMERA_FPS = 15
 
 # ZMQ detection publisher (for servotest to consume)
 zmq_context = None
