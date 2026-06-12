@@ -89,7 +89,12 @@ def load_tflite_model():
             tflite_output_details = tflite_interpreter.get_output_details()
             print(f"✓ TFLite model loaded from {tflite_model_path}")
             print(f"  Input shape: {tflite_input_details[0]['shape']}")
+            print(f"  Input dtype: {tflite_input_details[0]['dtype']}")
+            if 'quantization' in tflite_input_details[0]:
+                print(f"  Input quantization: {tflite_input_details[0]['quantization']}")
             print(f"  Output tensors: {len(tflite_output_details)}")
+            for i, output in enumerate(tflite_output_details):
+                print(f"    Output {i}: shape={output['shape']}, dtype={output['dtype']}")
     except Exception as e:
         print(f"⚠ Failed to load TFLite model: {e}")
         import traceback
@@ -269,17 +274,41 @@ class CameraTrack(VideoStreamTrack):
             # Prepare input: resize and normalize
             input_shape = tflite_input_details[0]['shape']
             img_h, img_w = int(input_shape[1]), int(input_shape[2])
+            
+            # Resize frame
             frame_resized = cv2.resize(frame_rgb, (img_w, img_h))
             
-            # Normalize to [0, 1] based on model input type
+            # Get input dtype and quantization info
             input_dtype = tflite_input_details[0]['dtype']
-            if input_dtype == np.float32:
+            quantization = tflite_input_details[0].get('quantization', (0.0, 0))
+            scale, zero_point = quantization
+            
+            # Prepare input based on dtype
+            if input_dtype == np.uint8:
+                # Quantized uint8 input
+                if scale != 0:
+                    frame_normalized = (frame_resized.astype(np.float32) / 255.0 / scale) + zero_point
+                    frame_normalized = np.clip(frame_normalized, 0, 255).astype(np.uint8)
+                else:
+                    frame_normalized = frame_resized.astype(np.uint8)
+            elif input_dtype == np.int8:
+                # Quantized int8 input
                 frame_normalized = frame_resized.astype(np.float32) / 255.0
+                if scale != 0:
+                    frame_normalized = (frame_normalized / scale) + zero_point
+                    frame_normalized = np.clip(frame_normalized, -128, 127).astype(np.int8)
             else:
-                frame_normalized = frame_resized.astype(input_dtype)
+                # Float input
+                frame_normalized = frame_resized.astype(np.float32) / 255.0
+            
+            # Ensure C-contiguous array (required by TFLite)
+            frame_normalized = np.ascontiguousarray(frame_normalized)
             
             # Add batch dimension
             input_data = np.expand_dims(frame_normalized, axis=0)
+            input_data = np.ascontiguousarray(input_data)
+            
+            print(f"  Input data shape: {input_data.shape}, dtype: {input_data.dtype}")
             
             # Set input and run inference
             tflite_interpreter.set_tensor(tflite_input_details[0]['index'], input_data)
@@ -288,6 +317,8 @@ class CameraTrack(VideoStreamTrack):
             # Get output
             detections = []
             output_data = tflite_interpreter.get_tensor(tflite_output_details[0]['index'])
+            
+            print(f"  Output shape: {output_data.shape}, dtype: {output_data.dtype}")
             
             # Parse TFLite output - handle multiple possible output shapes
             confidence_threshold = 0.6
@@ -300,7 +331,7 @@ class CameraTrack(VideoStreamTrack):
                         continue
                     
                     x, y, w, h = detection[:4]
-                    conf = detection[4] if len(detection) > 4 else 0.0
+                    conf = float(detection[4]) if len(detection) > 4 else 0.0
                     
                     if conf < confidence_threshold:
                         continue
@@ -319,7 +350,7 @@ class CameraTrack(VideoStreamTrack):
                         cls_names = {0: 'good', 1: 'defective', 2: 'not defective'}
                         cls_name = cls_names.get(cls_idx, f'class_{cls_idx}')
                     
-                    detections.append((x1, y1, x2, y2, float(conf), cls_name))
+                    detections.append((x1, y1, x2, y2, conf, cls_name))
             
             return detections
         except Exception as e:
