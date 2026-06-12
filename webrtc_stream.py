@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""WebRTC camera stream with shared YOLO detector.
+"""WebRTC camera stream with shared YOLO detector (background-threaded).
 
 Captures frames and streams them via WebRTC to browser.
-YOLO detections are handled by yolo_detector_shared.py (shared with servotest).
+YOLO detections run in a separate thread to keep WebRTC recv() lightweight.
 
 Usage:
   pip install flask flask-cors aiortc opencv-python av picamera2 ultralytics
@@ -52,9 +52,9 @@ def setup_event_loop():
 camera = None
 camera_lock = threading.Lock()
 
-CAMERA_WIDTH = 320
-CAMERA_HEIGHT = 240
-CAMERA_FPS = 15
+CAMERA_WIDTH = 480
+CAMERA_HEIGHT = 360
+CAMERA_FPS = 30
 
 # ZMQ detection publisher (for servotest to consume)
 zmq_context = None
@@ -65,6 +65,13 @@ DETECTION_PORT = 5555
 last_detections = []
 last_multi_detection = False
 detection_cache_lock = threading.Lock()
+
+# Latest captured frame (shared between background thread and WebRTC recv)
+latest_frame = None
+latest_frame_lock = threading.Lock()
+
+# Background detection runs at this interval (seconds) — ~10 Hz
+DETECTION_INTERVAL = 0.1
 
 # YOLO model (loaded once at startup, shared across all connections)
 yolo_model = None
@@ -111,6 +118,47 @@ def normalize_frame(frame):
     return frame
 
 
+def run_detection(frame):
+    """Run YOLO detection on frame. Returns list of (x1,y1,x2,y2,conf,cls_name)."""
+    if yolo_model is None:
+        return []
+    try:
+        results = yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
+        detections = []
+        if results and len(results) > 0:
+            result = results[0]
+            boxes = result.boxes
+            if boxes is not None and len(boxes) > 0:
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    conf = float(box.conf[0])
+                    cls_name = None
+                    try:
+                        if hasattr(box, 'cls') and box.cls is not None:
+                            cls_idx = int(box.cls[0])
+                            if hasattr(yolo_model, 'names'):
+                                cls_name = yolo_model.names.get(cls_idx, str(cls_idx))
+                            else:
+                                cls_name = str(cls_idx)
+                    except Exception:
+                        pass
+                    detections.append((x1, y1, x2, y2, conf, cls_name))
+        return detections
+    except Exception as e:
+        print(f"⚠ YOLO inference error: {e}")
+        return []
+
+
+def check_defective(detection_boxes):
+    """Check if any detection is defective."""
+    for x1, y1, x2, y2, conf, cls_name in detection_boxes:
+        if cls_name:
+            cn = str(cls_name).strip().lower()
+            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
+                return True
+    return False
+
+
 def draw_detection_boxes(frame, boxes):
     """Draw bounding boxes on frame.
     
@@ -138,97 +186,139 @@ def draw_detection_boxes(frame, boxes):
     return frame
 
 
+def background_capture():
+    """Capture thread: grab frames from the camera at full FPS.
 
+    Runs independently of YOLO inference so that latest_frame stays fresh
+    even while the detection thread is blocked on a slow inference call.
+    """
+    global latest_frame
+
+    print("✓ Background capture thread started")
+
+    while True:
+        try:
+            if camera is None:
+                time.sleep(0.1)
+                continue
+
+            # capture_array() blocks until camera delivers a frame — natural pacing at camera FPS
+            with camera_lock:
+                frame = camera.capture_array()
+            frame = normalize_frame(frame)
+            frame = cv2.flip(frame, 0)
+
+            with latest_frame_lock:
+                latest_frame = frame
+
+        except Exception as e:
+            print(f"⚠ Capture error: {e}")
+            time.sleep(0.1)
+
+
+def background_detect():
+    """Detection thread: run YOLO on the latest frame at a throttled rate.
+
+    Reads from latest_frame (updated by the capture thread) so inference
+    never blocks camera capture.  Results are cached for recv() to draw
+    and published via ZMQ for servotest.
+    """
+    global last_detections, last_multi_detection
+
+    last_log_time = 0
+    prev_detection_count = -1
+
+    print("✓ Background detection thread started")
+
+    while True:
+        try:
+            # Grab the most recent frame from the capture thread
+            with latest_frame_lock:
+                frame = latest_frame.copy() if latest_frame is not None else None
+
+            if frame is None or yolo_model is None:
+                time.sleep(0.1)
+                continue
+
+            detection_boxes = run_detection(frame)
+            is_defective = check_defective(detection_boxes)
+
+            with detection_cache_lock:
+                last_detections = detection_boxes
+                last_multi_detection = len(detection_boxes) > 1
+
+            # Publish via ZMQ for servotest
+            if detection_publisher is not None:
+                now = time.time()
+                detection_msg = {
+                    'detections': [
+                        {
+                            'x1': int(x1), 'y1': int(y1),
+                            'x2': int(x2), 'y2': int(y2),
+                            'confidence': float(conf),
+                            'class': str(cls_name) if cls_name else 'mango'
+                        }
+                        for x1, y1, x2, y2, conf, cls_name in detection_boxes
+                    ],
+                    'is_defective': is_defective,
+                    'multi_detection': len(detection_boxes) > 1,
+                    'timestamp': now
+                }
+                try:
+                    detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    pass
+
+            # Throttled logging: only on change or every 5 seconds
+            now = time.time()
+            current_count = len(detection_boxes)
+            if current_count != prev_detection_count or (now - last_log_time) >= 5.0:
+                if detection_boxes:
+                    print(f"🔍 YOLO detected {current_count} mango(es):")
+                    for x1, y1, x2, y2, conf, cls_name in detection_boxes:
+                        print(f"   - Class: {cls_name}, Confidence: {conf:.2f}")
+                elif (now - last_log_time) >= 5.0:
+                    print("⚪ No mangoes detected")
+                print(f"   📊 is_defective={is_defective}")
+                prev_detection_count = current_count
+                last_log_time = now
+
+            # Pace detection to avoid busy-looping
+            time.sleep(DETECTION_INTERVAL)
+
+        except Exception as e:
+            print(f"⚠ Detection error: {e}")
+            time.sleep(0.5)
 
 
 class CameraTrack(VideoStreamTrack):
+    """WebRTC video track that streams the latest captured frame.
+
+    All heavy work (camera capture, YOLO inference, ZMQ publishing) now runs in
+    background threads.  recv() only reads the cached frame and draws cached 
+    detection boxes — keeping the WebRTC encode path lightweight for smooth video.
+    """
+
     def __init__(self, width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
         super().__init__()
         self.width = width
         self.height = height
         self.fps = fps
-        self.frame_count = 0
-        self.camera_available = False
-
-        try:
-            init_camera()
-            self.camera_available = True
-            print("✓ Camera initialized for WebRTC via shared Picamera2")
-        except Exception as e:
-            print(f"⚠ picamera2 error: {e}")
-            self.camera_available = False
-
-        if not self.camera_available:
-            print("⚠ Camera not available - will stream black frames as fallback")
 
     async def recv(self):
-        """Capture frame, run YOLO detection, publish via ZMQ, and stream via WebRTC."""
+        """Return the latest frame with detection overlays for WebRTC."""
         pts, time_base = await self.next_timestamp()
 
-        if self.camera_available:
-            try:
-                with camera_lock:
-                    frame = camera.capture_array()
-                frame = normalize_frame(frame)
-                frame = cv2.flip(frame, 0)
-                
-                # Run YOLO detection on every frame for reliable defect detection
-                # Better real-time responsiveness for camera-based routing
-                if yolo_model is not None:
-                    try:
-                        detection_boxes = self._run_detection(frame)
-                        is_defective = self._check_defective(detection_boxes)
-                        
-                        # DEBUG: Log detection details
-                        if detection_boxes:
-                            print(f"🔍 YOLO detected {len(detection_boxes)} mango(es):")
-                            for x1, y1, x2, y2, conf, cls_name in detection_boxes:
-                                print(f"   - Class: {cls_name}, Confidence: {conf:.2f}")
-                        else:
-                            print(f"⚪ No mangoes detected in frame")
-                        
-                        print(f"   📊 is_defective={is_defective}")
-                        
-                        # Update detection cache for /api/detections endpoint
-                        with detection_cache_lock:
-                            global last_detections, last_multi_detection
-                            last_detections = detection_boxes
-                            last_multi_detection = len(detection_boxes) > 1
-                    except Exception as e:
-                        print(f"⚠ Detection error: {e}")
-                
-                # ALWAYS publish latest detection state via ZMQ (every frame, not just every 2 frames)
-                # This ensures servotest always gets fresh data
-                if detection_publisher is not None:
-                    with detection_cache_lock:
-                        detection_msg = {
-                            'detections': [
-                                {
-                                    'x1': int(x1), 'y1': int(y1), 
-                                    'x2': int(x2), 'y2': int(y2),
-                                    'confidence': float(conf),
-                                    'class': str(cls_name) if cls_name else 'mango'
-                                }
-                                for x1, y1, x2, y2, conf, cls_name in last_detections
-                            ],
-                            'is_defective': self._check_defective(last_detections),
-                            'multi_detection': last_multi_detection,
-                            'timestamp': time.time()
-                        }
-                    try:
-                        detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
-                    except zmq.Again:
-                        pass  # Queue full, skip this publish
-                
-                # Draw detection boxes on frame
-                frame = draw_detection_boxes(frame, last_detections)
-                self.frame_count += 1
-                
-            except Exception as e:
-                print(f"⚠ Camera read error: {e}")
-                frame = 255 * np.zeros((self.height, self.width, 3), np.uint8)
-        else:
-            frame = 255 * np.zeros((self.height, self.width, 3), np.uint8)
+        # Grab latest frame from background capture thread
+        with latest_frame_lock:
+            frame = latest_frame.copy() if latest_frame is not None else None
+
+        if frame is None:
+            frame = np.zeros((self.height, self.width, 3), np.uint8)
+
+        # Draw cached detection boxes (updated by background thread)
+        with detection_cache_lock:
+            frame = draw_detection_boxes(frame, list(last_detections))
 
         try:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -243,49 +333,6 @@ class CameraTrack(VideoStreamTrack):
             video_frame.pts = pts
             video_frame.time_base = time_base
             return video_frame
-    
-    def _run_detection(self, frame):
-        """Run YOLO detection on frame."""
-        if yolo_model is None:
-            return []
-        
-        try:
-            results = yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
-            detections = []
-            
-            if results and len(results) > 0:
-                result = results[0]
-                boxes = result.boxes
-                if boxes is not None and len(boxes) > 0:
-                    for box in boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        conf = float(box.conf[0])
-                        cls_name = None
-                        try:
-                            if hasattr(box, 'cls') and box.cls is not None:
-                                cls_idx = int(box.cls[0])
-                                if hasattr(yolo_model, 'names'):
-                                    cls_name = yolo_model.names.get(cls_idx, str(cls_idx))
-                                else:
-                                    cls_name = str(cls_idx)
-                        except Exception:
-                            pass
-                        detections.append((x1, y1, x2, y2, conf, cls_name))
-            
-            return detections
-        except Exception as e:
-            print(f"⚠ YOLO inference error: {e}")
-            return []
-    
-    def _check_defective(self, detection_boxes):
-        """Check if any detection is defective."""
-        for x1, y1, x2, y2, conf, cls_name in detection_boxes:
-            if cls_name:
-                cn = str(cls_name).strip().lower()
-                # Check if explicitly defective (NOT "not defective")
-                if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                    return True
-        return False
 
 
 @app.route('/offer', methods=['POST'])
@@ -405,10 +452,25 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"⚠ Failed to initialize ZMQ: {e}")
         detection_publisher = None
-    
+
     print("Starting Mango Sorter WebRTC stream on port 8082...")
+    print(f"Resolution: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
+    print(f"Detection interval: {DETECTION_INTERVAL}s (~{1/DETECTION_INTERVAL:.0f} Hz)")
     print("Access endpoint: http://0.0.0.0:8082/offer")
-    
-    setup_event_loop()
+
     load_yolo_model()  # Load YOLO model once at startup
+
+    # Initialize camera and start background capture+detection threads
+    try:
+        init_camera()
+    except Exception as e:
+        print(f"⚠ Camera init failed: {e} — will stream black frames")
+
+    cap_thread = threading.Thread(target=background_capture, daemon=True)
+    cap_thread.start()
+
+    det_thread = threading.Thread(target=background_detect, daemon=True)
+    det_thread.start()
+
+    setup_event_loop()
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
