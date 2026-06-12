@@ -265,84 +265,84 @@ class CameraTrack(VideoStreamTrack):
             return []
         
         try:
-            # Convert BGR to RGB if needed
-            if frame.shape[2] == 3:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            else:
-                frame_rgb = frame
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Prepare input: resize and normalize
+            # Get input shape
             input_shape = tflite_input_details[0]['shape']
             img_h, img_w = int(input_shape[1]), int(input_shape[2])
             
-            # Resize frame
+            # Resize frame to model input size
             frame_resized = cv2.resize(frame_rgb, (img_w, img_h))
             
-            # Get input dtype and quantization info
-            input_dtype = tflite_input_details[0]['dtype']
-            quantization = tflite_input_details[0].get('quantization', (0.0, 0))
-            scale, zero_point = quantization
+            # Normalize to float32 [0, 1]
+            frame_normalized = frame_resized.astype(np.float32) / 255.0
             
-            # Prepare input based on dtype
-            if input_dtype == np.uint8:
-                # Quantized uint8 input
-                if scale != 0:
-                    frame_normalized = (frame_resized.astype(np.float32) / 255.0 / scale) + zero_point
-                    frame_normalized = np.clip(frame_normalized, 0, 255).astype(np.uint8)
-                else:
-                    frame_normalized = frame_resized.astype(np.uint8)
-            elif input_dtype == np.int8:
-                # Quantized int8 input
-                frame_normalized = frame_resized.astype(np.float32) / 255.0
-                if scale != 0:
-                    frame_normalized = (frame_normalized / scale) + zero_point
-                    frame_normalized = np.clip(frame_normalized, -128, 127).astype(np.int8)
-            else:
-                # Float input
-                frame_normalized = frame_resized.astype(np.float32) / 255.0
-            
-            # Ensure C-contiguous array (required by TFLite)
-            frame_normalized = np.ascontiguousarray(frame_normalized)
-            
-            # Add batch dimension
+            # Add batch dimension and ensure C-contiguous
             input_data = np.expand_dims(frame_normalized, axis=0)
             input_data = np.ascontiguousarray(input_data)
             
-            print(f"  Input data shape: {input_data.shape}, dtype: {input_data.dtype}")
-            
-            # Set input and run inference
+            # Set input tensor
             tflite_interpreter.set_tensor(tflite_input_details[0]['index'], input_data)
+            
+            # Run inference
             tflite_interpreter.invoke()
             
             # Get output
-            detections = []
             output_data = tflite_interpreter.get_tensor(tflite_output_details[0]['index'])
             
-            print(f"  Output shape: {output_data.shape}, dtype: {output_data.dtype}")
+            detections = []
+            confidence_threshold = 0.5
             
-            # Parse TFLite output - handle multiple possible output shapes
-            confidence_threshold = 0.6
+            # Parse output - flexible to handle different shapes
+            if output_data.size == 0:
+                return []
             
-            # Try to parse detections from output
-            if len(output_data.shape) == 3 and output_data.shape[0] == 1:
-                # Shape: [1, num_detections, values]
+            # Handle different output shapes
+            if len(output_data.shape) == 3:
+                # Shape: [batch, num_detections, values]
                 for detection in output_data[0]:
                     if len(detection) < 5:
                         continue
                     
-                    x, y, w, h = detection[:4]
-                    conf = float(detection[4]) if len(detection) > 4 else 0.0
+                    x, y, w, h, conf = detection[:5]
+                    conf = float(conf)
                     
                     if conf < confidence_threshold:
                         continue
                     
-                    # Convert center coords to corner coords (normalize to frame size)
+                    # Convert center coords to corner coords
                     x1 = max(0, int((x - w / 2) * self.width))
                     y1 = max(0, int((y - h / 2) * self.height))
                     x2 = min(self.width, int((x + w / 2) * self.width))
                     y2 = min(self.height, int((y + h / 2) * self.height))
                     
-                    # Get class if available
+                    # Get class name
+                    cls_name = 'mango'
+                    if len(detection) > 5:
+                        class_probs = detection[5:]
+                        cls_idx = int(np.argmax(class_probs))
+                        cls_names = {0: 'good', 1: 'defective', 2: 'not defective'}
+                        cls_name = cls_names.get(cls_idx, f'class_{cls_idx}')
+                    
+                    detections.append((x1, y1, x2, y2, conf, cls_name))
+            elif len(output_data.shape) == 2:
+                # Shape: [num_detections, values] - no batch dimension
+                for detection in output_data:
+                    if len(detection) < 5:
+                        continue
+                    
+                    x, y, w, h, conf = detection[:5]
+                    conf = float(conf)
+                    
+                    if conf < confidence_threshold:
+                        continue
+                    
+                    x1 = max(0, int((x - w / 2) * self.width))
+                    y1 = max(0, int((y - h / 2) * self.height))
+                    x2 = min(self.width, int((x + w / 2) * self.width))
+                    y2 = min(self.height, int((y + h / 2) * self.height))
+                    
                     cls_name = 'mango'
                     if len(detection) > 5:
                         class_probs = detection[5:]
