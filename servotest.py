@@ -596,14 +596,21 @@ def scan_for_defect():
                     with detection_lock:
                         last_detection_data = detection_data
                     
-                    # Extract defect status and multi-mango flag
-                    is_defective = detection_data.get('is_defective', False)
+                    # Try multiple possible field names for defect status
+                    is_defective = (
+                        detection_data.get('is_defective', False) or
+                        detection_data.get('defective', False) or
+                        detection_data.get('quality', False) == 'defective' or
+                        detection_data.get('status', False) == 'defective'
+                    )
+                    
                     multi_detection = detection_data.get('multi_detection', False)
                     detections_list = detection_data.get('detections', [])
                     
                     detection_received = True
                     
                     print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}, detections_count={len(detections_list)}")
+                    print(f"   🔍 Raw data keys: {list(detection_data.keys())}")
                     
                     if is_defective:
                         print(f"🚨 DEFECTIVE mango detected!")
