@@ -243,7 +243,7 @@ detection_lock = threading.Lock()
 # ==========================================
 # 2. TIMING VARIABLES 
 # ==========================================
-CAMERA_SCAN_DELAY = 2.0    # Belt stopped: Camera scans mango for defect (2 sec)
+CAMERA_SCAN_DELAY = 4.0    # Belt stopped: Camera scans mango for defect (4 sec) - increased for AI processing
 SIZE_SCAN_DURATION = 3.0   # Belt running: Size sensors scan mango (3 sec)
 SMALL_DROP_TIME = 2.0      # Time gate stays open for small mango to drop
 MEDIUM_DROP_TIME = 2.3     # Time gate stays open for medium mango to drop
@@ -628,6 +628,9 @@ def scan_for_defect():
     
     if not detection_received:
         print(f"⚠️ Detection timeout after {retry_count*100}ms, assuming GOOD")
+        print(f"   🔍 DEBUG: If camera showed defective, ZMQ message didn't arrive in time")
+        print(f"   🔍 DEBUG: Check if webrtc_stream.py is publishing to tcp://127.0.0.1:5555")
+        print(f"   🔍 DEBUG: Check if detection latency is > 2 seconds")
     
     return is_defective
 
