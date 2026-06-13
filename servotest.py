@@ -468,12 +468,11 @@ def operate_hopper_cycle():
 def route_defective():
     """
     DEFECTIVE ROUTE:
-    1. Stopper opens immediately (belt already running)
+    1. Stopper already opened by main loop (belt already running)
     2. Mango travels on belt without any size gates opening (rejected)
     3. Wait for mango to clear, then cycle hopper for next batch
     """
-    print("   🚨 DEFECTIVE ROUTE: Opening stopper, rejecting mango...")
-    operate_stopper_release()
+    print("   🚨 DEFECTIVE ROUTE: Rejecting mango to bin...")
     
     # Wait for defective mango to travel to reject bin
     # (approximately the time for largest mango to travel)
