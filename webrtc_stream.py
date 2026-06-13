@@ -82,13 +82,15 @@ def load_yolo_model():
     print("Loading YOLO model...")
     try:
         from ultralytics import YOLO
-        model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.pt'))
+        # OPTIMIZED: Using the highly efficient ONNX export weights
+        model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.onnx'))
         if not os.path.exists(model_path):
             print(f"⚠ YOLO model not found at {model_path}")
             yolo_model = None
         else:
-            yolo_model = YOLO(model_path)
-            print(f"✓ YOLO model loaded from {model_path}")
+            # Explicitly state 'detect' task for smooth ONNX runtime mapping
+            yolo_model = YOLO(model_path, task='detect')
+            print(f"✓ YOLO ONNX model successfully loaded from {model_path}")
     except Exception as e:
         print(f"⚠ Failed to load YOLO model: {e}")
         yolo_model = None
@@ -163,7 +165,7 @@ def run_detection(frame):
             print(f"   🎯 run_detection() called with frame: shape={frame.shape}, dtype={frame.dtype}")
             run_detection.first_run = True
         
-        # CRITICAL UPDATE: Increased conf, tightened iou, and switched network imgsz tracking to match 480pt weights
+        # OPTIMIZED PARAMS: Strict thresholds and native 480px frame scaling constraints
         results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
         
         raw_detections = []
@@ -215,7 +217,7 @@ def run_detection(frame):
                     is_det2_defective = 'not' not in c2_name and ('defect' in c2_name or 'bad' in c2_name or 'damaged' in c2_name or 'rotten' in c2_name)
                     
                     if is_det2_defective:
-                        det1 = det2  # Replace the clean anchor container frame with the defective validation target
+                        det1 = det2  # Override clean box data with the defective variant
                     
                     skip_indices.add(j)
             
