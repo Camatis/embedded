@@ -580,65 +580,79 @@ def scan_for_defect():
     time.sleep(CAMERA_SCAN_DELAY)
     
     is_defective = False
-    
-    # Poll ZMQ for detection result (up to 2 seconds)
     detection_received = False
     retry_count = 0
     max_retries = 20  # 20 * 100ms = 2 seconds max wait
     
+    print(f"   📡 Starting ZMQ poll (max {max_retries} retries, timeout after {max_retries*100}ms)...")
+    
     while not detection_received and retry_count < max_retries:
         try:
-            if detection_subscriber is not None:
-                try:
-                    detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
-                    print(f"   📊 ZMQ received: {detection_data}")
-                    
-                    with detection_lock:
-                        last_detection_data = detection_data
-                    
-                    # Try multiple possible field names for defect status
-                    is_defective = (
-                        detection_data.get('is_defective', False) or
-                        detection_data.get('defective', False) or
-                        detection_data.get('quality', False) == 'defective' or
-                        detection_data.get('status', False) == 'defective'
-                    )
-                    
-                    multi_detection = detection_data.get('multi_detection', False)
-                    detections_list = detection_data.get('detections', [])
-                    
-                    detection_received = True
-                    
-                    print(f"   ✓ is_defective={is_defective}, multi_detection={multi_detection}, detections_count={len(detections_list)}")
-                    print(f"   🔍 Raw data keys: {list(detection_data.keys())}")
-                    
-                    if is_defective:
-                        print(f"🚨 DEFECTIVE mango detected!")
-                    if multi_detection:
-                        print("⚠️ MULTIPLE MANGOES DETECTED!")
-                        with multi_detection_lock:
-                            global multi_detection_flag
-                            multi_detection_flag = True
-                except zmq.Again:
-                    # No message yet, wait and retry
-                    retry_count += 1
-                    if retry_count % 5 == 0:
-                        print(f"   ⏳ Waiting for detection... ({retry_count*100}ms elapsed)")
-                    if retry_count < max_retries:
-                        time.sleep(0.1)
-            else:
-                print("⚠️ Detection service not available, assuming GOOD")
+            if detection_subscriber is None:
+                print("   ⚠️ Subscriber is None!")
+                break
+                
+            try:
+                detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
+                print(f"   ✅ ZMQ MESSAGE RECEIVED:")
+                print(f"      Raw: {detection_data}")
+                
+                # Extract defect status
+                is_defective_field = detection_data.get('is_defective', None)
+                multi_detection = detection_data.get('multi_detection', False)
+                detections_list = detection_data.get('detections', [])
+                
+                # Parse is_defective
+                is_defective = bool(is_defective_field)
+                
                 detection_received = True
+                
+                print(f"      ✓ PARSED: is_defective_field={is_defective_field} -> is_defective={is_defective}")
+                print(f"      ✓ detections_count={len(detections_list)}, multi_detection={multi_detection}")
+                
+                if len(detections_list) > 0:
+                    print(f"      ✓ Detection classes: {[d.get('class', 'unknown') for d in detections_list]}")
+                
+                if is_defective:
+                    print(f"      🚨🚨🚨 DEFECTIVE DETECTED - WILL ROUTE TO DEFECTIVE BIN")
+                else:
+                    print(f"      ✅ Good mango - will proceed to next stage")
+                    
+                if multi_detection:
+                    print("      ⚠️ WARNING: MULTIPLE MANGOES DETECTED!")
+                    with multi_detection_lock:
+                        global multi_detection_flag
+                        multi_detection_flag = True
+                        
+            except zmq.Again:
+                # No message yet, wait and retry
+                retry_count += 1
+                if retry_count == 1 or retry_count % 5 == 0:
+                    print(f"      ⏳ Retry {retry_count}/{max_retries} - no message yet")
+                if retry_count < max_retries:
+                    time.sleep(0.1)
+                    
         except Exception as e:
-            print(f"⚠️ Detection error: {e}, assuming GOOD")
-            detection_received = True
+            print(f"      ❌ Exception during polling: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            break
     
     if not detection_received:
-        print(f"⚠️ Detection timeout after {retry_count*100}ms, assuming GOOD")
-        print(f"   🔍 DEBUG: If camera showed defective, ZMQ message didn't arrive in time")
-        print(f"   🔍 DEBUG: Check if webrtc_stream.py is publishing to tcp://127.0.0.1:5555")
-        print(f"   🔍 DEBUG: Check if detection latency is > 2 seconds")
+        print(f"   ⏱️ TIMEOUT: No message received after {retry_count*100}ms")
+        
+        # Fallback: Try to use most recent cached detection
+        with detection_lock:
+            if last_detection_data is not None:
+                print(f"   💾 FALLBACK: Using cached detection data")
+                is_defective = bool(last_detection_data.get('is_defective', False))
+                detections_list = last_detection_data.get('detections', [])
+                print(f"      → Cached is_defective={is_defective}, detections_count={len(detections_list)}")
+            else:
+                print(f"   ⚠️ No cached data either, assuming GOOD")
+                is_defective = False
     
+    print(f"   📤 RETURNING: is_defective={is_defective}")
     return is_defective
 
 def flip_mango_for_second_scan():
