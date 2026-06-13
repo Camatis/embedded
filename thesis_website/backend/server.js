@@ -1152,7 +1152,7 @@ app.get('/api/hardware/detection', async (req, res) => {
     const data = await response.json();
     return res.json(data);
   } catch (err) {
-    console.debug('Failed to fetch detection from webrtc_stream:', err.message);
+    // Silent fail - webrtc_stream may be starting up or temporarily unavailable
     // Return default safe response on error
     return res.json({ multi_detection: false, detection_count: 0, detections: [] });
   }

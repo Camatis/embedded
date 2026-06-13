@@ -11,6 +11,7 @@ import signal
 import sys
 import zmq
 import json
+import requests
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
 from flask import Flask, jsonify, request
@@ -233,12 +234,9 @@ print("Aligning Hopper Servo to rest position (180° / arm fully LEFT)...")
 initial_startup_drop()
 time.sleep(2)
 
-# --- Shared ZMQ Detection (subscribe to webrtc_stream) ---
-zmq_context = None
-detection_subscriber = None
-DETECTION_PORT = 5555
-last_detection_data = None
-detection_lock = threading.Lock()
+# --- Detection Configuration ---
+# Now using HTTP GET from webrtc_stream for simpler, more reliable detection
+# No longer using ZMQ subscriptions
 
 # ==========================================
 # 2. TIMING VARIABLES 
@@ -573,8 +571,8 @@ def are_all_gates_default():
 
 def scan_for_defect():
     """
-    Scan one side of mango for defects.
-    Returns is_defective (bool) or None if scan failed
+    Scan one side of mango for defects by polling webrtc_stream's latest detection.
+    Returns is_defective (bool)
     """
     print(f"🧠 Camera scanning for defects ({CAMERA_SCAN_DELAY} seconds)...")
     time.sleep(CAMERA_SCAN_DELAY)
@@ -582,19 +580,19 @@ def scan_for_defect():
     is_defective = False
     detection_received = False
     retry_count = 0
-    max_retries = 20  # 20 * 100ms = 2 seconds max wait
+    max_retries = 40  # 40 * 100ms = 4 seconds
     
-    print(f"   📡 Starting ZMQ poll (max {max_retries} retries, timeout after {max_retries*100}ms)...")
+    print(f"   📡 Polling webrtc_stream for detection (max {max_retries} retries)...")
     
     while not detection_received and retry_count < max_retries:
         try:
-            if detection_subscriber is None:
-                print("   ⚠️ Subscriber is None!")
-                break
+            # HTTP GET latest detection from webrtc_stream
+            response = requests.get('http://127.0.0.1:8082/detection', timeout=2)
+            
+            if response.status_code == 200:
+                detection_data = response.json()
                 
-            try:
-                detection_data = detection_subscriber.recv_json(flags=zmq.NOBLOCK)
-                print(f"   ✅ ZMQ MESSAGE RECEIVED:")
+                print(f"   ✅ HTTP DETECTION RECEIVED:")
                 print(f"      Raw: {detection_data}")
                 
                 # Extract defect status
@@ -611,7 +609,8 @@ def scan_for_defect():
                 print(f"      ✓ detections_count={len(detections_list)}, multi_detection={multi_detection}")
                 
                 if len(detections_list) > 0:
-                    print(f"      ✓ Detection classes: {[d.get('class', 'unknown') for d in detections_list]}")
+                    classes = [d.get('class', 'unknown') for d in detections_list]
+                    print(f"      ✓ Detection classes: {classes}")
                 
                 if is_defective:
                     print(f"      🚨🚨🚨 DEFECTIVE DETECTED - WILL ROUTE TO DEFECTIVE BIN")
@@ -624,33 +623,32 @@ def scan_for_defect():
                         global multi_detection_flag
                         multi_detection_flag = True
                         
-            except zmq.Again:
-                # No message yet, wait and retry
+            else:
+                # Bad response status, retry
                 retry_count += 1
-                if retry_count == 1 or retry_count % 5 == 0:
-                    print(f"      ⏳ Retry {retry_count}/{max_retries} - no message yet")
+                if retry_count % 10 == 0:
+                    print(f"      ⏳ Retry {retry_count}/{max_retries} - got HTTP {response.status_code}")
                 if retry_count < max_retries:
                     time.sleep(0.1)
                     
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            # Timeout or connection error, retry
+            retry_count += 1
+            if retry_count % 10 == 0:
+                print(f"      ⏳ Retry {retry_count}/{max_retries} - {type(e).__name__}")
+            if retry_count < max_retries:
+                time.sleep(0.1)
+                
         except Exception as e:
-            print(f"      ❌ Exception during polling: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            break
+            print(f"      ❌ Exception: {type(e).__name__}: {e}")
+            retry_count += 1
+            if retry_count < max_retries:
+                time.sleep(0.1)
     
     if not detection_received:
-        print(f"   ⏱️ TIMEOUT: No message received after {retry_count*100}ms")
-        
-        # Fallback: Try to use most recent cached detection
-        with detection_lock:
-            if last_detection_data is not None:
-                print(f"   💾 FALLBACK: Using cached detection data")
-                is_defective = bool(last_detection_data.get('is_defective', False))
-                detections_list = last_detection_data.get('detections', [])
-                print(f"      → Cached is_defective={is_defective}, detections_count={len(detections_list)}")
-            else:
-                print(f"   ⚠️ No cached data either, assuming GOOD")
-                is_defective = False
+        print(f"   ⏱️ TIMEOUT: No valid detection received after {retry_count*100}ms")
+        print(f"   ⚠️ webrtc_stream may not be running or responding")
+        is_defective = False
     
     print(f"   📤 RETURNING: is_defective={is_defective}")
     return is_defective
@@ -874,19 +872,8 @@ def autonomous_sorting_loop():
             traceback.print_exc()
             time.sleep(1)
 
-# Initialize ZMQ detection subscriber (listening to webrtc_stream)
-try:
-    zmq_context = zmq.Context()
-    detection_subscriber = zmq_context.socket(zmq.SUB)
-    detection_subscriber.setsockopt(zmq.RCVHWM, 1)  # Keep only latest message
-    detection_subscriber.connect(f"tcp://127.0.0.1:{DETECTION_PORT}")
-    detection_subscriber.subscribe(b"")  # Subscribe to all messages
-    print(f"✓ ZMQ detection subscriber initialized on tcp://127.0.0.1:{DETECTION_PORT}")
-    time.sleep(0.5)  # Give time for connection to establish
-except Exception as e:
-    print(f"⚠️ Failed to initialize ZMQ: {e}")
-    print("⚠️ servotest will attempt sorting without defect detection")
-    detection_subscriber = None
+# Detection now uses HTTP GET from webrtc_stream (no ZMQ initialization needed)
+print(f"✓ Detection polling configured to use HTTP GET from webrtc_stream on port 8082")
 
 # Start sorting loop in background thread
 sorting_thread = threading.Thread(target=autonomous_sorting_loop)
