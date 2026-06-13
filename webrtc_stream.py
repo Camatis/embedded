@@ -230,18 +230,18 @@ def check_defective(detection_boxes):
 def draw_detection_boxes(frame, boxes):
     """Draw bounding boxes on frame.
     
-    Color logic:
+    Color logic (RGB format):
     - Green (0, 255, 0): Good mangoes (default or non-defective classes)
-    - Red (0, 0, 255): Defective mangoes (class name contains 'defect', 'bad', etc.)
+    - Red (255, 0, 0): Defective mangoes (class name contains 'defect', 'bad', etc.)
     """
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        # Determine color based on class name
+        # Determine color based on class name (RGB format!)
         color = (0, 255, 0)  # Default: green for good mangoes
         if cls_name:
             cn = str(cls_name).strip().lower()
             # Mark as RED only if it's explicitly defective (ignore "not defective")
             if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                color = (0, 0, 255)  # Red for defective mangoes
+                color = (255, 0, 0)  # Red for defective mangoes (RGB format!)
         
         # Draw rectangle
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
