@@ -801,5 +801,3 @@ finally:
     cleanup_hardware()
     
     print("\n✅ Hardware safely powered down. Program exited.")
-
-
