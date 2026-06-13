@@ -306,6 +306,7 @@ def background_detect():
 
     last_log_time = 0
     prev_detection_count = -1
+    first_frame_logged = False
 
     print("✓ Background detection thread started")
 
@@ -318,6 +319,11 @@ def background_detect():
             if frame is None or yolo_model is None:
                 time.sleep(0.1)
                 continue
+            
+            # Log first valid frame info
+            if not first_frame_logged:
+                print(f"   📸 First frame received: shape={frame.shape}, dtype={frame.dtype}")
+                first_frame_logged = True
 
             detection_boxes = run_detection(frame)
             is_defective = check_defective(detection_boxes)
@@ -355,7 +361,7 @@ def background_detect():
                 if detection_boxes:
                     print(f"🔍 YOLO detected {current_count} mango(es):")
                     for x1, y1, x2, y2, conf, cls_name in detection_boxes:
-                        print(f"   - Class: {cls_name}, Confidence: {conf:.2f}")
+                        print(f"   - Class: {cls_name}, Confidence: {conf:.2f}, Box: ({x1},{y1})-({x2},{y2})")
                 elif (now - last_log_time) >= 5.0:
                     print("⚪ No mangoes detected")
                 print(f"   📊 is_defective={is_defective}")
@@ -397,7 +403,10 @@ class CameraTrack(VideoStreamTrack):
 
         # Draw cached detection boxes (updated by background thread)
         with detection_cache_lock:
+            boxes_count = len(last_detections)
             frame = draw_detection_boxes(frame, list(last_detections))
+            if boxes_count > 0 and boxes_count % 10 == 0:
+                print(f"   📺 recv() drawing {boxes_count} boxes on frame")
 
         try:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
