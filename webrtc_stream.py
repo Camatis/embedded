@@ -94,28 +94,76 @@ def load_yolo_model():
         yolo_model = None
 
 def init_camera():
+    """Initialize Picamera2 with explicit RGB format for clean frame capture."""
     global camera
     if camera is not None:
         return camera
 
-    camera = Picamera2()
-    config = camera.create_video_configuration(main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT)})
-    camera.configure(config)
-    camera.start()
-    print("✓ Shared Picamera2 instance started")
-    return camera
+    try:
+        camera = Picamera2()
+        
+        # Request RGB format explicitly to avoid format ambiguity
+        config = camera.create_video_configuration(
+            main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"}
+        )
+        camera.configure(config)
+        camera.start()
+        print(f"✓ Picamera2 initialized: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps (RGB888 format)")
+        
+        # Warm up camera with a few dummy captures
+        for i in range(3):
+            try:
+                _ = camera.capture_array()
+                time.sleep(0.05)
+            except:
+                pass
+        print("✓ Camera warmup complete")
+        
+        return camera
+    except Exception as e:
+        print(f"⚠ Camera initialization failed: {e}")
+        camera = None
+        return None
 
 
 def normalize_frame(frame):
-    if frame is None:
+    """Normalize frame to BGR format (expected by OpenCV/YOLO).
+    
+    Picamera2 can output various formats: RGB, RGBA, planar YUV, etc.
+    This function standardizes to BGR which is what the rest of the pipeline expects.
+    """
+    if frame is None or frame.size == 0:
         return None
-    if frame.ndim == 2:
-        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    if frame.shape[2] == 4:
-        return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-    if frame.shape[2] == 1:
-        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    return frame
+    
+    try:
+        # If already 3-channel BGR, return as-is
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            # Ensure it's BGR (Picamera2 often outputs RGB by default)
+            # Try to detect format by checking if it looks like RGB (bright green channel)
+            # For safety, we'll convert assuming it's RGB and convert to BGR
+            if frame.dtype == np.uint8:
+                return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            return frame
+        
+        # 4-channel RGBA -> BGR
+        if frame.ndim == 3 and frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        
+        # Single channel grayscale -> BGR
+        if frame.ndim == 2:
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        
+        # 1-channel with shape (H, W, 1) -> BGR
+        if frame.ndim == 3 and frame.shape[2] == 1:
+            return cv2.cvtColor(frame[:, :, 0], cv2.COLOR_GRAY2BGR)
+        
+        # If we can't determine format, return as-is and hope for the best
+        print(f"⚠ Unexpected frame format: shape={frame.shape}, dtype={frame.dtype}")
+        return frame
+        
+    except Exception as e:
+        print(f"⚠ Frame normalization failed: {e}")
+        return None
 
 
 def run_detection(frame):
@@ -195,6 +243,9 @@ def background_capture():
     global latest_frame
 
     print("✓ Background capture thread started")
+    
+    consecutive_errors = 0
+    MAX_CONSECUTIVE_ERRORS = 10
 
     while True:
         try:
@@ -205,14 +256,42 @@ def background_capture():
             # capture_array() blocks until camera delivers a frame — natural pacing at camera FPS
             with camera_lock:
                 frame = camera.capture_array()
+            
+            if frame is None:
+                consecutive_errors += 1
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    print(f"⚠ Camera returning None frames repeatedly, restarting...")
+                    camera = None
+                    init_camera()
+                    consecutive_errors = 0
+                time.sleep(0.1)
+                continue
+            
+            # Validate frame size
+            if frame.size == 0:
+                consecutive_errors += 1
+                time.sleep(0.1)
+                continue
+            
+            consecutive_errors = 0  # Reset on successful frame
+            
+            # Normalize frame format (handle various Picamera2 output formats)
             frame = normalize_frame(frame)
-            frame = cv2.flip(frame, 0)
+            
+            # Ensure frame is contiguous in memory (fixes some corruption issues)
+            frame = np.ascontiguousarray(frame)
+            
+            # Resize to expected dimensions if needed
+            h, w = frame.shape[:2]
+            if h != CAMERA_HEIGHT or w != CAMERA_WIDTH:
+                frame = cv2.resize(frame, (CAMERA_WIDTH, CAMERA_HEIGHT), interpolation=cv2.INTER_LINEAR)
 
             with latest_frame_lock:
                 latest_frame = frame
 
         except Exception as e:
             print(f"⚠ Capture error: {e}")
+            consecutive_errors += 1
             time.sleep(0.1)
 
 
