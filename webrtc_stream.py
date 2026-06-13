@@ -127,35 +127,25 @@ def init_camera():
 
 
 def normalize_frame(frame):
-    """Normalize frame to RGB format (what YOLO expects from Picamera2).
-    
-    Picamera2 outputs RGB888 by default when requested.
-    YOLO works with RGB, so we keep it as-is.
-    WebRTC recv() will convert to RGB for display.
-    """
+    """Normalize frame to RGB format (what YOLO expects from Picamera2)."""
     if frame is None or frame.size == 0:
         return None
     
     try:
-        # If already 3-channel RGB, return as-is (this is what we want!)
         if frame.ndim == 3 and frame.shape[2] == 3:
             if frame.dtype == np.uint8:
-                return frame  # Already RGB, perfect for YOLO
+                return frame  
             return frame
         
-        # 4-channel RGBA -> RGB
         if frame.ndim == 3 and frame.shape[2] == 4:
             return cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
         
-        # Single channel grayscale -> RGB
         if frame.ndim == 2:
             return cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
         
-        # 1-channel with shape (H, W, 1) -> RGB
         if frame.ndim == 3 and frame.shape[2] == 1:
             return cv2.cvtColor(frame[:, :, 0], cv2.COLOR_GRAY2RGB)
         
-        # If we can't determine format, return as-is and hope for the best
         print(f"⚠ Unexpected frame format: shape={frame.shape}, dtype={frame.dtype}")
         return frame
         
@@ -169,26 +159,17 @@ def run_detection(frame):
     if yolo_model is None:
         return []
     try:
-        # DEBUG: Log frame info on first run
         if not hasattr(run_detection, 'first_run'):
-            print(f"   🎯 run_detection() called with frame: shape={frame.shape}, dtype={frame.dtype}, min={frame.min()}, max={frame.max()}")
+            print(f"   🎯 run_detection() called with frame: shape={frame.shape}, dtype={frame.dtype}")
             run_detection.first_run = True
         
-        # Try YOLO inference with lower confidence threshold
-        results = yolo_model(frame, verbose=False, conf=0.3, imgsz=320)
+        # CRITICAL UPDATE: Increased conf, tightened iou, and switched network imgsz tracking to match 480pt weights
+        results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
         
-        # DEBUG: Log raw results
-        detections = []
+        raw_detections = []
         if results and len(results) > 0:
             result = results[0]
             boxes = result.boxes
-            
-            # Log how many boxes YOLO found at various confidence levels
-            if boxes is not None and len(boxes) > 0:
-                all_confs = [float(b.conf[0]) for b in boxes]
-                print(f"   🎯 YOLO found {len(boxes)} raw boxes: confs={[f'{c:.3f}' for c in all_confs]}")
-            else:
-                print(f"   🎯 YOLO found 0 boxes (boxes is None or empty)")
             
             if boxes is not None and len(boxes) > 0:
                 for box in boxes:
@@ -204,12 +185,44 @@ def run_detection(frame):
                                 cls_name = str(cls_idx)
                     except Exception:
                         pass
-                    detections.append((x1, y1, x2, y2, conf, cls_name))
+                    raw_detections.append({"box": (x1, y1, x2, y2), "conf": conf, "class": cls_name})
+
+        # --- DEDUPLICATION FILTER FOR CONFLICTING BOX CLASSIFICATIONS ---
+        # If two distinct classes overlap on the same spot, prioritize the defect assignment
+        final_detections = []
+        skip_indices = set()
+
+        for i, det1 in enumerate(raw_detections):
+            if i in skip_indices:
+                continue
+            
+            for j, det2 in enumerate(raw_detections):
+                if i == j or j in skip_indices:
+                    continue
+                
+                b1, b2 = det1["box"], det2["box"]
+                center1 = ((b1[0] + b1[2]) / 2, (b1[1] + b1[3]) / 2)
+                center2 = ((b2[0] + b2[2]) / 2, (b2[1] + b2[3]) / 2)
+                
+                distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
+                
+                # Spatial checking distance boundary setup
+                if distance < 35:
+                    c1_name = str(det1["class"]).strip().lower()
+                    c2_name = str(det2["class"]).strip().lower()
+                    
+                    # Defect safety prioritization overwrite check
+                    is_det2_defective = 'not' not in c2_name and ('defect' in c2_name or 'bad' in c2_name or 'damaged' in c2_name or 'rotten' in c2_name)
+                    
+                    if is_det2_defective:
+                        det1 = det2  # Replace the clean anchor container frame with the defective validation target
+                    
+                    skip_indices.add(j)
+            
+            x1, y1, x2, y2 = det1["box"]
+            final_detections.append((x1, y1, x2, y2, det1["conf"], det1["class"]))
         
-        if len(detections) > 0:
-            print(f"   ✅ Returning {len(detections)} detections")
-        
-        return detections
+        return final_detections
     except Exception as e:
         print(f"⚠ YOLO inference error: {e}")
         import traceback
@@ -228,40 +241,24 @@ def check_defective(detection_boxes):
 
 
 def draw_detection_boxes(frame, boxes):
-    """Draw bounding boxes on frame.
-    
-    Color logic (RGB format):
-    - Green (0, 255, 0): Good mangoes (default or non-defective classes)
-    - Red (255, 0, 0): Defective mangoes (class name contains 'defect', 'bad', etc.)
-    """
+    """Draw bounding boxes on frame with explicit RGB structural colors."""
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        # Determine color based on class name (RGB format!)
-        color = (0, 255, 0)  # Default: green for good mangoes
+        color = (0, 255, 0)  # Default: Green for clean runs
         if cls_name:
             cn = str(cls_name).strip().lower()
-            # Mark as RED only if it's explicitly defective (ignore "not defective")
             if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                color = (255, 0, 0)  # Red for defective mangoes (RGB format!)
+                color = (255, 0, 0)  # Red for defects
         
-        # Draw rectangle
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        
-        # Draw label with class name and confidence
         label = f"{cls_name or 'Mango'} {conf:.2f}"
         cv2.putText(frame, label, (x1, max(20, y1 - 10)),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
     return frame
 
 
 def background_capture():
-    """Capture thread: grab frames from the camera at full FPS.
-
-    Runs independently of YOLO inference so that latest_frame stays fresh
-    even while the detection thread is blocked on a slow inference call.
-    """
+    """Capture thread: grab frames from the camera at full FPS."""
     global latest_frame, camera
-
     print("✓ Background capture thread started")
     
     consecutive_errors = 0
@@ -273,7 +270,6 @@ def background_capture():
                 time.sleep(0.1)
                 continue
 
-            # capture_array() blocks until camera delivers a frame — natural pacing at camera FPS
             with camera_lock:
                 frame = camera.capture_array()
             
@@ -287,21 +283,15 @@ def background_capture():
                 time.sleep(0.1)
                 continue
             
-            # Validate frame size
             if frame.size == 0:
                 consecutive_errors += 1
                 time.sleep(0.1)
                 continue
             
-            consecutive_errors = 0  # Reset on successful frame
-            
-            # Normalize frame format (handle various Picamera2 output formats)
+            consecutive_errors = 0  
             frame = normalize_frame(frame)
-            
-            # Ensure frame is contiguous in memory (fixes some corruption issues)
             frame = np.ascontiguousarray(frame)
             
-            # Resize to expected dimensions if needed
             h, w = frame.shape[:2]
             if h != CAMERA_HEIGHT or w != CAMERA_WIDTH:
                 frame = cv2.resize(frame, (CAMERA_WIDTH, CAMERA_HEIGHT), interpolation=cv2.INTER_LINEAR)
@@ -316,12 +306,7 @@ def background_capture():
 
 
 def background_detect():
-    """Detection thread: run YOLO on the latest frame at a throttled rate.
-
-    Reads from latest_frame (updated by the capture thread) so inference
-    never blocks camera capture.  Results are cached for recv() to draw
-    and published via ZMQ for servotest.
-    """
+    """Detection thread: run YOLO on the latest frame at a throttled rate."""
     global last_detections, last_multi_detection
 
     last_log_time = 0
@@ -332,7 +317,6 @@ def background_detect():
 
     while True:
         try:
-            # Grab the most recent frame from the capture thread
             with latest_frame_lock:
                 frame = latest_frame.copy() if latest_frame is not None else None
 
@@ -340,7 +324,6 @@ def background_detect():
                 time.sleep(0.1)
                 continue
             
-            # Log first valid frame info
             if not first_frame_logged:
                 print(f"   📸 First frame received: shape={frame.shape}, dtype={frame.dtype}")
                 first_frame_logged = True
@@ -352,7 +335,6 @@ def background_detect():
                 last_detections = detection_boxes
                 last_multi_detection = len(detection_boxes) > 1
 
-            # Publish via ZMQ for servotest
             if detection_publisher is not None:
                 now = time.time()
                 detection_msg = {
@@ -374,7 +356,6 @@ def background_detect():
                 except zmq.Again:
                     pass
 
-            # Throttled logging: only on change or every 5 seconds
             now = time.time()
             current_count = len(detection_boxes)
             if current_count != prev_detection_count or (now - last_log_time) >= 5.0:
@@ -388,7 +369,6 @@ def background_detect():
                 prev_detection_count = current_count
                 last_log_time = now
 
-            # Pace detection to avoid busy-looping
             time.sleep(DETECTION_INTERVAL)
 
         except Exception as e:
@@ -397,12 +377,7 @@ def background_detect():
 
 
 class CameraTrack(VideoStreamTrack):
-    """WebRTC video track that streams the latest captured frame.
-
-    All heavy work (camera capture, YOLO inference, ZMQ publishing) now runs in
-    background threads.  recv() only reads the cached frame and draws cached 
-    detection boxes — keeping the WebRTC encode path lightweight for smooth video.
-    """
+    """WebRTC video track that streams the latest captured frame."""
 
     def __init__(self, width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
         super().__init__()
@@ -414,23 +389,17 @@ class CameraTrack(VideoStreamTrack):
         """Return the latest frame with detection overlays for WebRTC."""
         pts, time_base = await self.next_timestamp()
 
-        # Grab latest frame from background capture thread (already in RGB)
         with latest_frame_lock:
             frame = latest_frame.copy() if latest_frame is not None else None
 
         if frame is None:
             frame = np.zeros((self.height, self.width, 3), np.uint8)
 
-        # Draw cached detection boxes (updated by background thread)
         with detection_cache_lock:
             boxes_count = len(last_detections)
-            # Frame is in RGB, draw_detection_boxes works with any format
             frame = draw_detection_boxes(frame, list(last_detections))
-            if boxes_count > 0 and boxes_count % 10 == 0:
-                print(f"   📺 recv() drawing {boxes_count} boxes on frame")
 
         try:
-            # Frame is already RGB, so just use it as-is for WebRTC
             video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
             video_frame.pts = pts
             video_frame.time_base = time_base
@@ -451,29 +420,24 @@ def offer():
         print("❌ Event loop not initialized")
         return jsonify({'success': False, 'error': 'Server not ready - event loop not initialized'}), 503
     
-    # Set the global event loop as current for this request thread
     asyncio.set_event_loop(loop)
-    
     data = request.get_json()
     if not data or 'sdp' not in data or 'type' not in data:
         return jsonify({'success': False, 'error': 'Missing SDP offer or type'}), 400
 
     try:
-        print(f"📡 Received WebRTC offer, processing...")
+        print(f"Pushing remote peer negotiation sequence profiles setup...")
         offer_desc = RTCSessionDescription(sdp=data['sdp'], type=data['type'])
         pc = RTCPeerConnection()
         pcs.add(pc)
-        print(f"✓ Created PeerConnection")
 
         @pc.on('iceconnectionstatechange')
         def on_iceconnectionstatechange():
-            print('ICE state:', pc.iceConnectionState)
             if pc.iceConnectionState == 'failed':
                 asyncio.run_coroutine_threadsafe(pc.close(), loop)
 
         camera_track = CameraTrack(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS)
         pc.addTrack(camera_track)
-        print(f"✓ Added camera track")
 
         async def run():
             await pc.setRemoteDescription(offer_desc)
@@ -481,20 +445,14 @@ def offer():
             await pc.setLocalDescription(answer)
             return pc.localDescription
 
-        # Schedule the async work on the global event loop and wait for result
         future = asyncio.run_coroutine_threadsafe(run(), loop)
         try:
             local_desc = future.result(timeout=15)
-            print(f"✓ Generated WebRTC answer")
             return jsonify({'success': True, 'sdp': local_desc.sdp, 'type': local_desc.type})
         except asyncio.TimeoutError:
-            print("❌ WebRTC answer generation timed out (>15s)")
             return jsonify({'success': False, 'error': 'Answer generation timeout'}), 500
     except Exception as e:
         error_msg = str(e) if str(e) else type(e).__name__
-        print(f"❌ WebRTC offer error: {error_msg}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'success': False, 'error': error_msg}), 500
 
 
@@ -510,7 +468,6 @@ def status():
 
 @app.route('/detection', methods=['GET'])
 def detection():
-    """Return current detection status including multi-mango alerts."""
     global last_detections, last_multi_detection
     with detection_cache_lock:
         return jsonify({
@@ -525,7 +482,6 @@ def detection():
 
 @app.route('/api/detections', methods=['GET'])
 def get_detections():
-    """Return latest detection results for servotest to consume."""
     global last_detections, last_multi_detection
     with detection_cache_lock:
         detections_formatted = []
@@ -550,30 +506,24 @@ def home():
 
 
 if __name__ == '__main__':
-    # Initialize ZMQ publisher for detection results
     try:
         zmq_context = zmq.Context()
         detection_publisher = zmq_context.socket(zmq.PUB)
-        detection_publisher.setsockopt(zmq.SNDHWM, 1)  # Keep only latest message
+        detection_publisher.setsockopt(zmq.SNDHWM, 1)  
         detection_publisher.bind(f"tcp://127.0.0.1:{DETECTION_PORT}")
         print(f"✓ ZMQ detection publisher started on tcp://127.0.0.1:{DETECTION_PORT}")
-        time.sleep(0.5)  # Give subscribers time to connect
+        time.sleep(0.5)  
     except Exception as e:
         print(f"⚠ Failed to initialize ZMQ: {e}")
         detection_publisher = None
 
     print("Starting Mango Sorter WebRTC stream on port 8082...")
-    print(f"Resolution: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
-    print(f"Detection interval: {DETECTION_INTERVAL}s (~{1/DETECTION_INTERVAL:.0f} Hz)")
-    print("Access endpoint: http://0.0.0.0:8082/offer")
+    load_yolo_model()  
 
-    load_yolo_model()  # Load YOLO model once at startup
-
-    # Initialize camera and start background capture+detection threads
     try:
         init_camera()
     except Exception as e:
-        print(f"⚠ Camera init failed: {e} — will stream black frames")
+        print(f"⚠ Camera init failed: {e}")
 
     cap_thread = threading.Thread(target=background_capture, daemon=True)
     cap_thread.start()

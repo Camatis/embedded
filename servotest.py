@@ -321,7 +321,7 @@ def get_gate_status():
 def reset_counts():
     global count_small, count_medium, count_large, count_defective, count_total, last_mango
     count_small = count_medium = count_large = count_defective = count_total = 0
-    last_mango = {"size": None, "health": None, "timestamp": None}
+    last_mango = {"size": None, "health": None, "timestamp": datetime.now().isoformat()}
     return jsonify({'success': True, 'message': 'All counts reset to zero'})
 
 @app.route('/api/hardware/detection', methods=['GET'])
@@ -333,7 +333,7 @@ def get_detection_status():
     return jsonify({'multi_detection': flag})
 
 # ==========================================
-# 4. ROUTING SYSTEMS (REFACTORED LOGIC)
+# 4. ROUTING SYSTEMS
 # ==========================================
 def operate_hopper_cycle():
     """Single hopper sweep sequence to load the next piece into the system."""
@@ -357,7 +357,6 @@ def execute_defective_delivery():
     print("   🔄 OPENING STOPPER GATE...")
     barrier_gate.angle = BARRIER_RELEASED
     
-    # Let mango travel past all sizing gates directly to end container
     time.sleep(LARGE_DROP_TIME)
     
     barrier_gate.angle = BARRIER_LOCKED
@@ -386,7 +385,7 @@ def execute_medium_delivery():
     print("   🎯 MEDIUM ROUTE: Opening stopper...")
     barrier_gate.angle = BARRIER_RELEASED
     
-    time.sleep(0.8) # Travel time window down belt line
+    time.sleep(0.8) 
     print("   🎯 Opening medium gate...")
     medium_gate.angle = GATE_OPEN
     gate_states['medium'] = 'open'
@@ -405,7 +404,7 @@ def execute_large_delivery():
     print("   🎯 LARGE ROUTE: Opening stopper...")
     barrier_gate.angle = BARRIER_RELEASED
     
-    time.sleep(2.2) # Extended travel timing context
+    time.sleep(2.2) 
     print("   🎯 Opening large gate...")
     large_gate.angle = GATE_OPEN
     gate_states['large'] = 'open'
@@ -432,7 +431,6 @@ def are_all_gates_default():
     )
 
 def scan_for_defect():
-    """Polls webrtc stream server endpoint and runs class analysis mapping."""
     print(f"🧠 Camera scanning for defects ({CAMERA_SCAN_DELAY} seconds)...")
     time.sleep(CAMERA_SCAN_DELAY)
     
@@ -450,7 +448,6 @@ def scan_for_defect():
                 multi_detection = detection_data.get('multi_detection', False)
                 detection_received = True
                 
-                # Manual parsing fix: Evaluate the classes directly since 'is_defective' doesn't exist on server JSON
                 for d in detections_list:
                     cls_name = str(d.get('class', '')).strip().lower()
                     if 'not' not in cls_name and ('defect' in cls_name or 'bad' in cls_name or 'damaged' in cls_name or 'rotten' in cls_name):
@@ -470,9 +467,9 @@ def scan_for_defect():
     return is_defective
 
 def flip_mango_for_second_scan():
-    print("▶️  RUNNING CONVEYOR FOR 1 SECOND TO FLIP MANGO...")
+    print("▶️  RUNNING CONVEYOR FOR 0.5 SECONDS TO FLIP MANGO...")
     set_conveyor_speed(CONVEYOR_SPEED)
-    time.sleep(1.0)
+    time.sleep(0.5)
     print("🛑 STOPPING CONVEYOR...")
     set_conveyor_speed(0)
 
@@ -486,11 +483,8 @@ def autonomous_sorting_loop():
                 time.sleep(0.1)
                 continue
             
-            # Continuous system trigger reading
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                 
-                # CRITICAL: Structural modification rule boundary enforcement
-                # Belt won't stop and scan if gate systems haven't returned to zero
                 if not are_all_gates_default():
                     time.sleep(0.1)
                     continue
@@ -510,7 +504,7 @@ def autonomous_sorting_loop():
                     print("✅ Chamber clear. Ready for next mango.\n")
                     continue
                 
-                # --- FLIP STEP ---
+                # --- FLIP STEP (0.5s) ---
                 print("✅ GOOD on first side → Flipping mango for second scan...")
                 flip_mango_for_second_scan()
                 
@@ -535,7 +529,6 @@ def autonomous_sorting_loop():
                 detected_size = "SMALL"
                 end_time = time.time() + SIZE_SCAN_DURATION
                 
-                # Sizing window collection logic loop
                 while time.time() < end_time:
                     if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
                         detected_size = "LARGE"
@@ -545,7 +538,6 @@ def autonomous_sorting_loop():
                 
                 print(f"📏 Size scan complete → Detected: {detected_size}")
                 
-                # Update counters and call physical distributions sequentially
                 if detected_size == "SMALL":
                     count_small += 1
                     last_mango = {"size": "SMALL", "health": "GOOD", "timestamp": datetime.now().isoformat()}
@@ -574,7 +566,7 @@ def autonomous_sorting_loop():
             print(f"❌ ERROR in sorting loop: {e}")
             time.sleep(1)
 
-# Main instantiation thread initializations
+# Service thread initialization
 sorting_thread = threading.Thread(target=autonomous_sorting_loop)
 sorting_thread.daemon = True
 sorting_thread.start()
