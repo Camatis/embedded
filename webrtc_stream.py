@@ -240,7 +240,7 @@ def background_capture():
     Runs independently of YOLO inference so that latest_frame stays fresh
     even while the detection thread is blocked on a slow inference call.
     """
-    global latest_frame
+    global latest_frame, camera
 
     print("✓ Background capture thread started")
     
