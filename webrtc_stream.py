@@ -127,35 +127,33 @@ def init_camera():
 
 
 def normalize_frame(frame):
-    """Normalize frame to BGR format (expected by OpenCV/YOLO).
+    """Normalize frame to RGB format (what YOLO expects from Picamera2).
     
-    Picamera2 can output various formats: RGB, RGBA, planar YUV, etc.
-    This function standardizes to BGR which is what the rest of the pipeline expects.
+    Picamera2 outputs RGB888 by default when requested.
+    YOLO works with RGB, so we keep it as-is.
+    WebRTC recv() will convert to RGB for display.
     """
     if frame is None or frame.size == 0:
         return None
     
     try:
-        # If already 3-channel BGR, return as-is
+        # If already 3-channel RGB, return as-is (this is what we want!)
         if frame.ndim == 3 and frame.shape[2] == 3:
-            # Ensure it's BGR (Picamera2 often outputs RGB by default)
-            # Try to detect format by checking if it looks like RGB (bright green channel)
-            # For safety, we'll convert assuming it's RGB and convert to BGR
             if frame.dtype == np.uint8:
-                return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                return frame  # Already RGB, perfect for YOLO
             return frame
         
-        # 4-channel RGBA -> BGR
+        # 4-channel RGBA -> RGB
         if frame.ndim == 3 and frame.shape[2] == 4:
-            return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+            return cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
         
-        # Single channel grayscale -> BGR
+        # Single channel grayscale -> RGB
         if frame.ndim == 2:
-            return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
         
-        # 1-channel with shape (H, W, 1) -> BGR
+        # 1-channel with shape (H, W, 1) -> RGB
         if frame.ndim == 3 and frame.shape[2] == 1:
-            return cv2.cvtColor(frame[:, :, 0], cv2.COLOR_GRAY2BGR)
+            return cv2.cvtColor(frame[:, :, 0], cv2.COLOR_GRAY2RGB)
         
         # If we can't determine format, return as-is and hope for the best
         print(f"⚠ Unexpected frame format: shape={frame.shape}, dtype={frame.dtype}")
@@ -171,11 +169,27 @@ def run_detection(frame):
     if yolo_model is None:
         return []
     try:
-        results = yolo_model(frame, verbose=False, conf=0.6, imgsz=320)
+        # DEBUG: Log frame info on first run
+        if not hasattr(run_detection, 'first_run'):
+            print(f"   🎯 run_detection() called with frame: shape={frame.shape}, dtype={frame.dtype}, min={frame.min()}, max={frame.max()}")
+            run_detection.first_run = True
+        
+        # Try YOLO inference with lower confidence threshold
+        results = yolo_model(frame, verbose=False, conf=0.3, imgsz=320)
+        
+        # DEBUG: Log raw results
         detections = []
         if results and len(results) > 0:
             result = results[0]
             boxes = result.boxes
+            
+            # Log how many boxes YOLO found at various confidence levels
+            if boxes is not None and len(boxes) > 0:
+                all_confs = [float(b.conf[0]) for b in boxes]
+                print(f"   🎯 YOLO found {len(boxes)} raw boxes: confs={[f'{c:.3f}' for c in all_confs]}")
+            else:
+                print(f"   🎯 YOLO found 0 boxes (boxes is None or empty)")
+            
             if boxes is not None and len(boxes) > 0:
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -191,9 +205,15 @@ def run_detection(frame):
                     except Exception:
                         pass
                     detections.append((x1, y1, x2, y2, conf, cls_name))
+        
+        if len(detections) > 0:
+            print(f"   ✅ Returning {len(detections)} detections")
+        
         return detections
     except Exception as e:
         print(f"⚠ YOLO inference error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -394,7 +414,7 @@ class CameraTrack(VideoStreamTrack):
         """Return the latest frame with detection overlays for WebRTC."""
         pts, time_base = await self.next_timestamp()
 
-        # Grab latest frame from background capture thread
+        # Grab latest frame from background capture thread (already in RGB)
         with latest_frame_lock:
             frame = latest_frame.copy() if latest_frame is not None else None
 
@@ -404,12 +424,13 @@ class CameraTrack(VideoStreamTrack):
         # Draw cached detection boxes (updated by background thread)
         with detection_cache_lock:
             boxes_count = len(last_detections)
+            # Frame is in RGB, draw_detection_boxes works with any format
             frame = draw_detection_boxes(frame, list(last_detections))
             if boxes_count > 0 and boxes_count % 10 == 0:
                 print(f"   📺 recv() drawing {boxes_count} boxes on frame")
 
         try:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Frame is already RGB, so just use it as-is for WebRTC
             video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
             video_frame.pts = pts
             video_frame.time_base = time_base
