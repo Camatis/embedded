@@ -561,12 +561,13 @@ print("Press Ctrl+C to cleanly shut down motors.")
 print("="*45)
 
 def are_all_gates_default():
-    """Check if all gates are in their default (closed/locked) positions"""
+    """Check if all gates are in their default (closed/locked) positions with tolerance"""
+    ANGLE_TOLERANCE = 5  # Allow ±5 degrees tolerance for servo precision
     gates_ok = (
-        small_gate.angle == GATE_CLOSED and
-        medium_gate.angle == GATE_CLOSED and
-        large_gate.angle == GATE_CLOSED and
-        barrier_gate.angle == BARRIER_LOCKED
+        abs(small_gate.angle - GATE_CLOSED) <= ANGLE_TOLERANCE and
+        abs(medium_gate.angle - GATE_CLOSED) <= ANGLE_TOLERANCE and
+        abs(large_gate.angle - GATE_CLOSED) <= ANGLE_TOLERANCE and
+        abs(barrier_gate.angle - BARRIER_LOCKED) <= ANGLE_TOLERANCE
     )
     return gates_ok
 
