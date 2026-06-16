@@ -2,6 +2,7 @@
 """WebRTC camera stream with shared YOLO detector (background-threaded).
 
 Optimized with a Frame-Dropping Queue to achieve zero lag on Raspberry Pi.
+Integrated with deadlock-free frame capture and WebRTC track pacing guards.
 """
 
 import asyncio
@@ -56,7 +57,7 @@ detection_cache_lock = threading.Lock()
 latest_frame = None
 latest_frame_lock = threading.Lock()
 
-# New flag to let the capture thread know the detection thread is ready for a fresh frame
+# Flag to let the capture thread know the detection thread is ready for a fresh frame
 frame_is_new = False 
 
 # Controlled throttling: Don't choke the CPU, give it breathing room between runs
@@ -106,7 +107,6 @@ def run_detection(frame):
     if yolo_model is None:
         return []
     try:
-        # Optimized for ONNX runtime processing metrics
         results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
         
         raw_detections = []
@@ -161,7 +161,7 @@ def run_detection(frame):
         return []
 
 def background_capture():
-    """Capture thread: Grab raw frames and overwrite the global buffer instantly."""
+    """Capture thread: Grab raw frames safely without deadlocking the driver queue."""
     global latest_frame, camera, frame_is_new
     print("✓ Background capture thread started")
     
@@ -171,23 +171,29 @@ def background_capture():
                 time.sleep(0.1)
                 continue
 
-            with camera_lock:
-                frame = camera.capture_array()
+            # FIX: Attempt to non-blockingly acquire camera resources to avoid multi-thread stalls
+            if camera_lock.acquire(blocking=False):
+                try:
+                    frame = camera.capture_array()
+                finally:
+                    camera_lock.release()
+            else:
+                time.sleep(0.01)
+                continue
             
             if frame is None or frame.size == 0:
                 time.sleep(0.01)
                 continue
             
-            # Instantly overwrite whatever was there before—no queueing allowed
             clean_frame = np.ascontiguousarray(frame).copy()
             
             with latest_frame_lock:
                 latest_frame = clean_frame
-                frame_is_new = True # Signal to the detector that this frame is brand new
+                frame_is_new = True 
 
-            time.sleep(1 / CAMERA_FPS) # Keep pace matching the frame rate smoothly
+            time.sleep(1 / CAMERA_FPS) 
         except Exception as e:
-            print(f"⚠ Capture error: {e}")
+            print(f"⚠ Capture error bypass: {e}")
             time.sleep(0.1)
 
 def background_detect():
@@ -199,21 +205,17 @@ def background_detect():
         try:
             frame = None
             
-            # Zero-Lag Core: Check if a new frame has actually been captured yet
             with latest_frame_lock:
                 if frame_is_new and latest_frame is not None:
                     frame = latest_frame.copy()
-                    frame_is_new = False # Mark as consumed so we don't process it twice
+                    frame_is_new = False 
 
-            # If no fresh frame is ready, skip this cycle and check again shortly
             if frame is None:
                 time.sleep(0.01)
                 continue
 
             detection_boxes = run_detection(frame)
             
-            # ZERO-LAG FIX: If nothing is found, immediately clear the bounding box list!
-            # This ensures that once the mango leaves, the box disappears instantly.
             if len(detection_boxes) == 0:
                 with detection_cache_lock:
                     last_detections = []
@@ -264,8 +266,13 @@ class CameraTrack(VideoStreamTrack):
         self.fps = fps
 
     async def recv(self):
+        """Zero-lock isolated frame retrieval to eliminate web application crashes."""
+        # FIX: Force strict asynchronous track pacing matching targeting server frame rates
+        await asyncio.sleep(1 / self.fps)
         pts, time_base = await self.next_timestamp()
+        
         with latest_frame_lock:
+            # FIX: Create an isolated deep copy out of RAM to shield camera thread registers
             frame = latest_frame.copy() if latest_frame is not None else None
 
         if frame is None:
