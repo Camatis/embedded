@@ -2,7 +2,7 @@
 """WebRTC camera stream with shared YOLO detector (background-threaded).
 
 Optimized with a Frame-Dropping Queue to achieve zero lag on Raspberry Pi.
-Integrated with deadlock-free frame capture and WebRTC track pacing guards.
+Decoupled and scaled for stable frontend React Dashboard rendering.
 """
 
 import asyncio
@@ -42,9 +42,10 @@ def setup_event_loop():
 camera = None
 camera_lock = threading.Lock()
 
-CAMERA_WIDTH = 480
-CAMERA_HEIGHT = 360
-CAMERA_FPS = 15
+# OPTIMIZED: Adjusted resolution metrics to stop web dashboard freezes and memory leaks
+CAMERA_WIDTH = 416
+CAMERA_HEIGHT = 312
+CAMERA_FPS = 12
 
 zmq_context = None
 detection_publisher = None
@@ -107,6 +108,7 @@ def run_detection(frame):
     if yolo_model is None:
         return []
     try:
+        # Imgsz stays 480 to match your final_weights.onnx natively without accuracy drop
         results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
         
         raw_detections = []
@@ -171,7 +173,7 @@ def background_capture():
                 time.sleep(0.1)
                 continue
 
-            # FIX: Attempt to non-blockingly acquire camera resources to avoid multi-thread stalls
+            # Attempt to non-blockingly acquire camera resources to avoid multi-thread stalls
             if camera_lock.acquire(blocking=False):
                 try:
                     frame = camera.capture_array()
@@ -267,12 +269,10 @@ class CameraTrack(VideoStreamTrack):
 
     async def recv(self):
         """Zero-lock isolated frame retrieval to eliminate web application crashes."""
-        # FIX: Force strict asynchronous track pacing matching targeting server frame rates
         await asyncio.sleep(1 / self.fps)
         pts, time_base = await self.next_timestamp()
         
         with latest_frame_lock:
-            # FIX: Create an isolated deep copy out of RAM to shield camera thread registers
             frame = latest_frame.copy() if latest_frame is not None else None
 
         if frame is None:
