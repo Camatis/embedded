@@ -42,7 +42,6 @@ def setup_event_loop():
 camera = None
 camera_lock = threading.Lock()
 
-# OPTIMIZED: Adjusted resolution metrics to stop web dashboard freezes and memory leaks
 CAMERA_WIDTH = 416
 CAMERA_HEIGHT = 312
 CAMERA_FPS = 12
@@ -58,12 +57,8 @@ detection_cache_lock = threading.Lock()
 latest_frame = None
 latest_frame_lock = threading.Lock()
 
-# Flag to let the capture thread know the detection thread is ready for a fresh frame
 frame_is_new = False 
-
-# Controlled throttling: Don't choke the CPU, give it breathing room between runs
 DETECTION_INTERVAL = 0.03 
-
 yolo_model = None
 
 def load_yolo_model():
@@ -108,7 +103,6 @@ def run_detection(frame):
     if yolo_model is None:
         return []
     try:
-        # Imgsz stays 480 to match your final_weights.onnx natively without accuracy drop
         results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
         
         raw_detections = []
@@ -163,7 +157,6 @@ def run_detection(frame):
         return []
 
 def background_capture():
-    """Capture thread: Grab raw frames safely without deadlocking the driver queue."""
     global latest_frame, camera, frame_is_new
     print("✓ Background capture thread started")
     
@@ -173,7 +166,6 @@ def background_capture():
                 time.sleep(0.1)
                 continue
 
-            # Attempt to non-blockingly acquire camera resources to avoid multi-thread stalls
             if camera_lock.acquire(blocking=False):
                 try:
                     frame = camera.capture_array()
@@ -199,7 +191,6 @@ def background_capture():
             time.sleep(0.1)
 
 def background_detect():
-    """Detection thread: ONLY analyze fresh frames. Clears cache when empty."""
     global last_detections, last_multi_detection, frame_is_new
     print("✓ Background detection thread started")
 
@@ -268,7 +259,6 @@ class CameraTrack(VideoStreamTrack):
         self.fps = fps
 
     async def recv(self):
-        """Zero-lock isolated frame retrieval to eliminate web application crashes."""
         await asyncio.sleep(1 / self.fps)
         pts, time_base = await self.next_timestamp()
         
@@ -315,15 +305,24 @@ def offer():
     if loop is None:
         return jsonify({'success': False, 'error': 'Server not ready'}), 503
     asyncio.set_event_loop(loop)
-    data = request.get_json()
+    
+    data = request.get_json() or {}
+    
+    # FIXED: Safely intercept both nested data payloads and raw dictionary attributes
+    sdp = data.get('sdp') or data.get('data', {}).get('sdp')
+    sdp_type = data.get('type') or data.get('data', {}).get('type') or 'offer'
+
+    if not sdp:
+        return jsonify({'success': False, 'error': 'Missing core SDP payload attributes'}), 400
+
     try:
-        offer_desc = RTCSessionDescription(sdp=data['sdp'], type=data['type'])
+        offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
         pc = RTCPeerConnection()
         pcs.add(pc)
 
         @pc.on('iceconnectionstatechange')
         def on_iceconnectionstatechange():
-            if pc.iceConnectionState == 'failed' or pc.iceConnectionState == 'closed':
+            if pc.iceConnectionState in ['failed', 'closed', 'disconnected']:
                 asyncio.run_coroutine_threadsafe(pc.close(), loop)
                 pcs.discard(pc)
 
@@ -340,6 +339,7 @@ def offer():
         local_desc = future.result(timeout=15)
         return jsonify({'success': True, 'sdp': local_desc.sdp, 'type': local_desc.type})
     except Exception as e:
+        print(f"⚠ WebRTC Negotiation Error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/status')

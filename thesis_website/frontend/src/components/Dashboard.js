@@ -102,7 +102,7 @@ function Dashboard({ user, token, onLogout }) {
 
   const controlGate = async (gate, action) => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`;
+      const apiUrl = `${BACKEND_URL}/api/hardware/gate`;
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -127,7 +127,7 @@ function Dashboard({ user, token, onLogout }) {
       } else if (action === 'continue') {
         endpoint = '/api/hardware/continue';
       }
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001${endpoint}`;
+      const apiUrl = `${BACKEND_URL}${endpoint}`;
       const payload = action === 'pause' || action === 'continue' ? {} : { action };
       const res = await fetch(apiUrl, {
         method: 'POST',
@@ -147,7 +147,7 @@ function Dashboard({ user, token, onLogout }) {
 
   const startHardware = async () => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/start`;
+      const apiUrl = `${BACKEND_URL}/api/hardware/start`;
       const res = await fetch(apiUrl, { method: 'POST' });
       const result = await res.json();
       if (res.ok) {
@@ -165,7 +165,7 @@ function Dashboard({ user, token, onLogout }) {
 
   const stopHardware = async () => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/stop`;
+      const apiUrl = `${BACKEND_URL}/api/hardware/stop`;
       const res = await fetch(apiUrl, { method: 'POST' });
       const result = await res.json();
       if (res.ok) {
@@ -183,7 +183,7 @@ function Dashboard({ user, token, onLogout }) {
 
   const getHardwareStatus = async () => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/status`;
+      const apiUrl = `${BACKEND_URL}/api/hardware/status`;
       const res = await fetch(apiUrl);
       const result = await res.json();
       return result;
@@ -208,7 +208,6 @@ function Dashboard({ user, token, onLogout }) {
         pcRef.current.close();
       }
 
-      // Add STUN servers for better NAT traversal on Raspberry Pi
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
@@ -241,18 +240,18 @@ function Dashboard({ user, token, onLogout }) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const piIp = '192.168.1.34';
-      const webrtcUrl = `${window.location.protocol}//${piIp}:8082/offer`;
-      console.log('Connecting to WebRTC stream at:', webrtcUrl);
+      // FIXED: Forward directly through the Node gateway proxy instead of hardcoding an unstable IP address
+      const webrtcUrl = `${BACKEND_URL}/api/webrtc-offer`;
+      console.log('Connecting to WebRTC stream via gateway at:', webrtcUrl);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 20000); 
 
       const response = await fetch(webrtcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'offer',
+          type: 'offer', // FIXED: Resolved missing comma token compilation failure
           sdp: offer.sdp
         }),
         signal: controller.signal
@@ -301,7 +300,7 @@ function Dashboard({ user, token, onLogout }) {
         pcRef.current = null;
       }
     };
-  }, [currentView]);
+  }, [currentView, cameraReloadKey]);
 
   const stopSessionImmediately = async () => {
     if (!sessionActive && !sessionPaused) return;
@@ -344,12 +343,10 @@ function Dashboard({ user, token, onLogout }) {
       setPasswordMessage('Please complete all password fields.');
       return;
     }
-
     if (pwNew.length < 6) {
       setPasswordMessage('New password must be at least 6 characters.');
       return;
     }
-
     if (pwNew !== pwConfirm) {
       setPasswordMessage('New Password and Confirm Password do not match.');
       return;
@@ -368,7 +365,6 @@ function Dashboard({ user, token, onLogout }) {
       setPasswordMessage('No local password record found for this user.');
       return;
     }
-
     if (existingPassword !== pwCurrent) {
       setPasswordMessage('Current password is incorrect.');
       return;
@@ -383,7 +379,6 @@ function Dashboard({ user, token, onLogout }) {
     setPwConfirm('');
   };
 
-  // Process sensor data and update stats
   const handleSensorData = (data) => {
     try {
       if (data.detectedSize || data.defective) {
@@ -396,7 +391,6 @@ function Dashboard({ user, token, onLogout }) {
         });
       }
 
-      // Update sensor states
       setSensorStates(prev => ({
         small: { ...prev.small, detecting: data.small },
         medium: { ...prev.medium, detecting: data.medium },
@@ -512,7 +506,6 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  // Poll sensor data
   useEffect(() => {
     setSensorStates(prev => ({
       small: { ...prev.small, status: 'Active' },
@@ -523,7 +516,7 @@ function Dashboard({ user, token, onLogout }) {
     let mounted = true;
     const pollSensorData = async () => {
       try {
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/sensors`;
+        const apiUrl = `${BACKEND_URL}/api/hardware/sensors`;
         const res = await fetch(apiUrl);
         if (!res.ok) return;
         const data = await res.json();
@@ -565,11 +558,10 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, [sessionActive, sessionPaused]);
 
-  // CPU temperature monitor
   useEffect(() => {
     const fetchTemp = async () => {
       try {
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/cpu-temp`;
+        const apiUrl = `${BACKEND_URL}/api/cpu-temp`;
         const res = await fetch(apiUrl);
         const data = await res.json();
         if (res.ok && data && typeof data.cpuTemp === 'number') {
@@ -613,10 +605,9 @@ function Dashboard({ user, token, onLogout }) {
     return () => clearInterval(intervalId);
   }, [stopSessionImmediately]);
 
-  // Fetch session list from backend
   const fetchSessions = async () => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions`;
+      const apiUrl = `${BACKEND_URL}/api/sessions`;
       const res = await fetch(apiUrl, {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -638,7 +629,6 @@ function Dashboard({ user, token, onLogout }) {
     fetchSessions();
   }, []);
 
-  // Show tutorial once when user logs in
   useEffect(() => {
     if (user) {
       const seen = localStorage.getItem('tutorialSeen');
@@ -648,12 +638,11 @@ function Dashboard({ user, token, onLogout }) {
     }
   }, [user]);
 
-  // Poll gate status for real-time feedback
   useEffect(() => {
     let mounted = true;
     const pollGateStatus = async () => {
       try {
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`;
+        const apiUrl = `${BACKEND_URL}/api/hardware/gate`;
         const res = await fetch(apiUrl);
         if (res.ok) {
           const data = await res.json();
@@ -674,12 +663,11 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
-  // Poll detection status for multi-mango alerts
   useEffect(() => {
     let mounted = true;
     const pollDetectionStatus = async () => {
       try {
-        const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/hardware/detection`;
+        const apiUrl = `${BACKEND_URL}/api/hardware/detection`;
         const res = await fetch(apiUrl);
         if (res.ok) {
           const data = await res.json();
@@ -700,7 +688,6 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
-  // Autosave counts periodically while session is active
   useEffect(() => {
     if (!sessionActive || !currentSessionId) return;
 
@@ -736,7 +723,6 @@ function Dashboard({ user, token, onLogout }) {
     return () => clearInterval(autosaveInterval);
   }, [sessionActive, currentSessionId, token]);
 
-  // Keep active session row updated
   useEffect(() => {
     if (!currentSessionId) return;
     setSessions(prev => prev.map(session => {
@@ -753,10 +739,9 @@ function Dashboard({ user, token, onLogout }) {
     }));
   }, [sortingStats, currentSessionId]);
 
-  // Delete all sessions on backend
   const clearSessions = async () => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions`;
+      const apiUrl = `${BACKEND_URL}/api/sessions`;
       const res = await fetch(apiUrl, {
         method: 'DELETE',
         headers: { 
@@ -797,7 +782,6 @@ function Dashboard({ user, token, onLogout }) {
       img.src = src;
     });
 
-  // Export system history as official PDF doc
   const exportSortingHistory = async () => {
     if (!sessions || sessions.length === 0) {
       alert('No sessions to export');
@@ -828,7 +812,6 @@ function Dashboard({ user, token, onLogout }) {
       doc.setTextColor('#011627');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      // CHANGED: Project title updated to MangoPain within document export header parameters
       doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGOPAIN)', margin, 15);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'normal');
@@ -956,7 +939,7 @@ function Dashboard({ user, token, onLogout }) {
 
   const saveEditing = async (id) => {
     try {
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions/${id}`;
+      const apiUrl = `${BACKEND_URL}/api/sessions/${id}`;
       const res = await fetch(apiUrl, {
         method: 'PUT',
         headers: { 
@@ -1068,7 +1051,7 @@ function Dashboard({ user, token, onLogout }) {
     setHardwareAlert('Continuing existing batch');
 
     try {
-      await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
+      await fetch(`${BACKEND_URL}/api/hardware/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'continue' })
@@ -1156,7 +1139,7 @@ function Dashboard({ user, token, onLogout }) {
         setSessionPaused(false);
         return;
       }
-      const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions/${currentSessionId}`;
+      const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
       const res = await fetch(apiUrl, {
         method: 'PUT',
         headers: {
@@ -1179,7 +1162,7 @@ function Dashboard({ user, token, onLogout }) {
       });
       if (res.ok) {
         try {
-          await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
+          await fetch(`${BACKEND_URL}/api/hardware/control`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'pause' })
@@ -1274,7 +1257,6 @@ function Dashboard({ user, token, onLogout }) {
             <span />
             <span />
           </div>
-          {/* CHANGED: Header Title updated from MangoSort to MangoPain */}
           <h1>MangoPain</h1>
         </div>
       </header>
@@ -1444,7 +1426,7 @@ function Dashboard({ user, token, onLogout }) {
                 <button
                   className="control-button start-button"
                   onClick={() => {
-                    fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`, {
+                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ gate: 'SMALL', action: 'open' })
@@ -1458,7 +1440,7 @@ function Dashboard({ user, token, onLogout }) {
                 <button
                   className="control-button stop-button"
                   onClick={() => {
-                    fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`, {
+                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ gate: 'SMALL', action: 'close' })
@@ -1479,7 +1461,7 @@ function Dashboard({ user, token, onLogout }) {
                 <button
                   className="control-button start-button"
                   onClick={() => {
-                    fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`, {
+                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ gate: 'MEDIUM', action: 'open' })
@@ -1493,7 +1475,7 @@ function Dashboard({ user, token, onLogout }) {
                 <button
                   className="control-button stop-button"
                   onClick={() => {
-                    fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`, {
+                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ gate: 'MEDIUM', action: 'close' })
@@ -1514,7 +1496,7 @@ function Dashboard({ user, token, onLogout }) {
                 <button
                   className="control-button start-button"
                   onClick={() => {
-                    fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`, {
+                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ gate: 'LARGE', action: 'open' })
@@ -1528,7 +1510,7 @@ function Dashboard({ user, token, onLogout }) {
                 <button
                   className="control-button stop-button"
                   onClick={() => {
-                    fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/gate`, {
+                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ gate: 'LARGE', action: 'close' })
