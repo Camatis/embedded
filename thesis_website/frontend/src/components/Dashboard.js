@@ -812,7 +812,7 @@ function Dashboard({ user, token, onLogout }) {
       doc.setTextColor('#011627');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGOPAIN)', margin, 15);
+      doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGPAIN)', margin, 15);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'normal');
       doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
@@ -1257,7 +1257,7 @@ function Dashboard({ user, token, onLogout }) {
             <span />
             <span />
           </div>
-          <h1>MangoPain</h1>
+          <h1>MangPain</h1>
         </div>
       </header>
 

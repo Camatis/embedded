@@ -105,15 +105,15 @@ function LandingPage({ onLogin, onCreateAccount }) {
 
     return (
       <div className="landing-tab-content landing-tab-panel overview-content">
-        {/* CHANGED: Main Header updated from MangoSort to MangoPain */}
-        <h1 className="landing-main-title animate-title">MangoPain</h1>
+        {/* CHANGED: Main Header updated from MangoSort to MangPain */}
+        <h1 className="landing-main-title animate-title">MangPain</h1>
         <h2 className="landing-subtitle animate-description">
           An IoT sensor-based size grading with advanced CNN computer vision to deliver consistent,
           objective, and efficient defect detection.
         </h2>
-        {/* CHANGED: Paragraph description text updated from MangoSort to MangoPain */}
+        {/* CHANGED: Paragraph description text updated from MangoSort to MangPain */}
         <p className="landing-description">
-          MangoPain is an automated cyber-physical prototype designed to streamline post-harvest processing
+          MangPain is an automated cyber-physical prototype designed to streamline post-harvest processing
           for Philippine Carabao mangoes. Powered by a Raspberry Pi 4 Model B, it combines a motorized
           conveyor belt system with a YOLO26 deep learning model and an array of infrared (IR) sensors.
           As fruit passes through the controlled scanning chamber, the system instantly analyzes its size
@@ -129,8 +129,8 @@ function LandingPage({ onLogin, onCreateAccount }) {
       <header className="dashboard-header landing-header">
         <div className="header-content landing-header-content">
           <div className="landing-id">
-            {/* CHANGED: Logo Text updated from MangoSort to MangoPain */}
-            <h1 className="landing-logo-title">MangoPain</h1>
+            {/* CHANGED: Logo Text updated from MangoSort to MangPain */}
+            <h1 className="landing-logo-title">MangPain</h1>
           </div>
           <nav className="landing-tabs">
             {['overview', 'about', 'researchers'].map(tab => (
@@ -154,8 +154,8 @@ function LandingPage({ onLogin, onCreateAccount }) {
       <main className="landing-main">
         {renderTabContent()}
       </main>
-      {/* CHANGED: Footer Copy updated from MangoSort to MangoPain */}
-      <footer className="landing-footer">© 2026 MangoPain - Built for Carabao Mango Quality Optimization</footer>
+      {/* CHANGED: Footer Copy updated from MangoSort to MangPain */}
+      <footer className="landing-footer">© 2026 MangPain - Built for Carabao Mango Quality Optimization</footer>
     </div>
   );
 }
