@@ -433,10 +433,10 @@ def scan_for_defect():
     return is_defective
 
 def flip_mango_for_second_scan():
-    # CHANGED: Adjusted flip interval window bounds to exactly 0.3 seconds
-    print("▶️  RUNNING CONVEYOR FOR 0.3 SECONDS TO FLIP MANGO...")
+    # CHANGED: Adjusted flip interval window bounds to exactly 0.2 seconds
+    print("▶️  RUNNING CONVEYOR FOR 0.2 SECONDS TO FLIP MANGO...")
     set_conveyor_speed(CONVEYOR_SPEED)
-    time.sleep(0.3)
+    time.sleep(0.2)
     print("🛑 STOPPING CONVEYOR...")
     set_conveyor_speed(0)
 
