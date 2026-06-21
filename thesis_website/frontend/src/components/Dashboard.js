@@ -3,15 +3,15 @@ import { jsPDF } from 'jspdf';
 import './Dashboard.css';
 
 function Dashboard({ user, token, onLogout }) {
-  //main view state
+  // Main view state
   const [currentView, setCurrentView] = useState('dashboard');
-  //sensor detection states
+  // Sensor detection states
   const [sensorStates, setSensorStates] = useState({
     small: { status: 'Inactive', detecting: false },
     medium: { status: 'Inactive', detecting: false },
     large: { status: 'Inactive', detecting: false }
   });
-  //last detected mango size
+  // Last detected mango size
   const [detectedSize, setDetectedSize] = useState('NONE');
   const [sortingStats, setSortingStats] = useState({
     small: 0,
@@ -20,10 +20,10 @@ function Dashboard({ user, token, onLogout }) {
     total: 0,
     defective: 0
   });
-  //defective flag
+  // Defective flag
   const [isDefective, setIsDefective] = useState(false);
   const [sortingHistory, setSortingHistory] = useState([]);
-  //session and batch management
+  // Session and batch management
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -95,7 +95,7 @@ function Dashboard({ user, token, onLogout }) {
   const [pwNew, setPwNew] = useState('');
   const [pwConfirm, setPwConfirm] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
-  //track counts with ref
+  // Track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
   const lastDetectedRef = useRef({ size: null, timestamp: null });
   const resetInProgressRef = useRef(false);
@@ -241,9 +241,7 @@ function Dashboard({ user, token, onLogout }) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // Connect to WebRTC stream server on port 8082
-       // Dynamically use the same IP that served this frontend (works across all networks)
-      const piIp = window.location.hostname;
+      const piIp = '192.168.1.34';
       const webrtcUrl = `${window.location.protocol}//${piIp}:8082/offer`;
       console.log('Connecting to WebRTC stream at:', webrtcUrl);
 
@@ -385,10 +383,9 @@ function Dashboard({ user, token, onLogout }) {
     setPwConfirm('');
   };
 
-  //process sensor data and update stats
+  // Process sensor data and update stats
   const handleSensorData = (data) => {
     try {
-      // Debug logging for received sensor data
       if (data.detectedSize || data.defective) {
         console.log('📡 [SENSOR DATA] Received:', { 
           sessionActive, 
@@ -399,7 +396,7 @@ function Dashboard({ user, token, onLogout }) {
         });
       }
 
-      //update sensor states
+      // Update sensor states
       setSensorStates(prev => ({
         small: { ...prev.small, detecting: data.small },
         medium: { ...prev.medium, detecting: data.medium },
@@ -428,7 +425,6 @@ function Dashboard({ user, token, onLogout }) {
         : null;
 
       if (countsSource) {
-        // Skip syncing counts if we just started a new batch (grace period for reset to stabilize)
         if (resetInProgressRef.current) {
           console.log('⏭️  [SYNC] Skipping count sync during reset grace period');
           return;
@@ -516,9 +512,8 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  //poll sensor data
+  // Poll sensor data
   useEffect(() => {
-    //mark sensors active
     setSensorStates(prev => ({
       small: { ...prev.small, status: 'Active' },
       medium: { ...prev.medium, status: 'Active' },
@@ -533,7 +528,6 @@ function Dashboard({ user, token, onLogout }) {
         if (!res.ok) return;
         const data = await res.json();
         
-        // Check if we actually got data
         if (!data || Object.keys(data).length === 0) return;
 
         const normalized = {
@@ -546,7 +540,6 @@ function Dashboard({ user, token, onLogout }) {
           lastMango: data.lastMango || {}
         };
         
-        // Log received data for debugging
         if (data.defective || data.detectedSize) {
           console.log('📡 Received from backend sensor endpoint:', {
             detectedSize: data.detectedSize,
@@ -563,23 +556,16 @@ function Dashboard({ user, token, onLogout }) {
       }
     };
 
-    // poll every 500ms to reduce CPU load and improve responsiveness on low-end devices
     const intervalId = setInterval(pollSensorData, 500);
-    // initial immediate poll
     pollSensorData();
 
     return () => {
       mounted = false;
       clearInterval(intervalId);
-      setSensorStates(prev => ({
-        small: { ...prev.small, status: 'Inactive' },
-        medium: { ...prev.medium, status: 'Inactive' },
-        large: { ...prev.large, status: 'Inactive' }
-      }));
     };
   }, [sessionActive, sessionPaused]);
 
-  // CPU temperature monitor (RPi read from /sys/class/thermal/thermal_zone0/temp)
+  // CPU temperature monitor
   useEffect(() => {
     const fetchTemp = async () => {
       try {
@@ -611,7 +597,6 @@ function Dashboard({ user, token, onLogout }) {
             setShowTempPopup(false);
           }
         } else {
-          // fallback to simulated value when no real sensor available
           setCpuTemp(prevTemp => {
             let nextTemp = prevTemp + (Math.random() * 4 - 1.5);
             nextTemp = Math.max(35, Math.min(92, nextTemp));
@@ -628,7 +613,7 @@ function Dashboard({ user, token, onLogout }) {
     return () => clearInterval(intervalId);
   }, [stopSessionImmediately]);
 
-    // Fetch session list from backend (used for Batch History)
+  // Fetch session list from backend
   const fetchSessions = async () => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions`;
@@ -638,7 +623,9 @@ function Dashboard({ user, token, onLogout }) {
         }
       });
       if (res.ok) {
-        const data = await res.json();        console.log('📋 Fetched sessions:', data);        setSessions(data);
+        const data = await res.json();
+        console.log('📋 Fetched sessions:', data);
+        setSessions(data);
       } else {
         console.error('Failed to fetch sessions');
       }
@@ -651,7 +638,7 @@ function Dashboard({ user, token, onLogout }) {
     fetchSessions();
   }, []);
 
-  // show tutorial once when user logs in (persisted in localStorage)
+  // Show tutorial once when user logs in
   useEffect(() => {
     if (user) {
       const seen = localStorage.getItem('tutorialSeen');
@@ -749,7 +736,7 @@ function Dashboard({ user, token, onLogout }) {
     return () => clearInterval(autosaveInterval);
   }, [sessionActive, currentSessionId, token]);
 
-  // Keep the active session row in history updated while a batch is running
+  // Keep active session row updated
   useEffect(() => {
     if (!currentSessionId) return;
     setSessions(prev => prev.map(session => {
@@ -766,7 +753,7 @@ function Dashboard({ user, token, onLogout }) {
     }));
   }, [sortingStats, currentSessionId]);
 
-  // Delete all sessions on backend and clear local state
+  // Delete all sessions on backend
   const clearSessions = async () => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions`;
@@ -784,7 +771,6 @@ function Dashboard({ user, token, onLogout }) {
         await fetchSessions();
       } else {
         console.error('Failed to clear sessions');
-        // fallback: clear UI state to avoid stale views
         setSessions([]);
         setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
       }
@@ -811,6 +797,7 @@ function Dashboard({ user, token, onLogout }) {
       img.src = src;
     });
 
+  // Export system history as official PDF doc
   const exportSortingHistory = async () => {
     if (!sessions || sessions.length === 0) {
       alert('No sessions to export');
@@ -822,7 +809,6 @@ function Dashboard({ user, token, onLogout }) {
       const margin = 18;
       let y = 28;
 
-      // App gradient style from AuthStyles (header and subheader gradient bands)
       doc.setFillColor(253, 184, 19);
       doc.rect(0, 0, 297, 10, 'F');
       doc.setFillColor(253, 141, 19);
@@ -830,7 +816,6 @@ function Dashboard({ user, token, onLogout }) {
       doc.setFillColor(107, 168, 47);
       doc.rect(0, 18, 297, 8, 'F');
 
-      // Add login logo from public asset
       try {
         const logoDataUrl = await loadImageDataUrl('/login.png');
         doc.addImage(logoDataUrl, 'PNG', 250, 8, 34, 34);
@@ -843,12 +828,12 @@ function Dashboard({ user, token, onLogout }) {
       doc.setTextColor('#011627');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.text('AUTOMATED MANGO SORTING SYSTEM', margin, 15);
+      // CHANGED: Project title updated to MangoPain within document export header parameters
+      doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGOPAIN)', margin, 15);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'normal');
       doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
 
-      // Place metadata below header
       y = 44;
       const username = user?.username || 'vince@email.com';
       const today = new Date();
@@ -893,7 +878,6 @@ function Dashboard({ user, token, onLogout }) {
       const tableWidth = colW.reduce((a, b) => a + b, 0);
       let x = margin;
 
-      // Header background
       doc.setFillColor(230, 230, 230);
       doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
 
@@ -913,7 +897,6 @@ function Dashboard({ user, token, onLogout }) {
         if (y > 270) {
           doc.addPage();
           y = 18;
-          // repeat header on new page
           x = margin;
           doc.setFillColor(230, 230, 230);
           doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
@@ -927,7 +910,6 @@ function Dashboard({ user, token, onLogout }) {
           x = margin;
         }
 
-        // alternating row stripes
         if (idx % 2 === 0) {
           doc.setFillColor(245, 245, 255);
           doc.rect(margin - 2, y - 4.5, tableWidth + 4, 7.5, 'F');
@@ -956,27 +938,22 @@ function Dashboard({ user, token, onLogout }) {
       doc.save(fileName);
       return;
     } catch (err) {
-      console.error('PDF export failed, check jsPDF installation:', err);
-      alert('PDF export failed. Please install jsPDF and reload (npm install jspdf).');
+      console.error('PDF export failed:', err);
+      alert('PDF export failed.');
       return;
     }
   };
 
-
-  // Inline rename handlers for session batch
-  // startEditing: enable edit mode for a session
   const startEditing = (id, currentName) => {
     setEditingSessionId(id);
     setEditingName(currentName || '');
   };
 
-  // cancelEditing: exit edit mode without saving
   const cancelEditing = () => {
     setEditingSessionId(null);
     setEditingName('');
   };
 
-  // saveEditing: persist edited session name to backend
   const saveEditing = async (id) => {
     try {
       const apiUrl = `${window.location.protocol}//${window.location.hostname}:5001/api/sessions/${id}`;
@@ -1000,12 +977,8 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  // handleToggleSession: start or stop a sorting session (POST / PUT)
-  // handleToggleSession: start or stop a sorting session (POST / PUT)
-  // Also saves final counts to batch history when stopping
   const startNewSession = async () => {
     try {
-      // Set grace period flag to prevent stale counts from syncing back (1 second - hardware now resets)
       resetInProgressRef.current = true;
       console.log('🔄 [RESET] Starting new batch - hardware resetting counts...');
       setTimeout(() => {
@@ -1054,7 +1027,6 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert(`Started offline, sync pending${errorText ? ': ' + errorText : ''}`);
       }
 
-      // Start the sorting process by launching the hardware controller program
       const startResult = await startHardware();
       const conveyorResult = await controlConveyor('start');
       const active = startResult.success && conveyorResult.success;
@@ -1095,7 +1067,6 @@ function Dashboard({ user, token, onLogout }) {
     setSessionPaused(false);
     setHardwareAlert('Continuing existing batch');
 
-    // Continue the sorting process
     try {
       await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
         method: 'POST',
@@ -1125,7 +1096,6 @@ function Dashboard({ user, token, onLogout }) {
         total: countsRef.current.total
       };
 
-      // Stop hardware and conveyor first so the UI can return to idle quickly.
       const stopResult = await stopHardware();
       const conveyorResult = await controlConveyor('stop');
 
@@ -1208,7 +1178,6 @@ function Dashboard({ user, token, onLogout }) {
         })
       });
       if (res.ok) {
-        // Pause the sorting process
         try {
           await fetch(`${window.location.protocol}//${window.location.hostname}:5001/api/hardware/control`, {
             method: 'POST',
@@ -1232,30 +1201,6 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  const handleToggleSession = async () => {
-    if (sessionActive) {
-      await pauseBatch();
-    } else if (sessionPaused && currentSessionId) {
-      continueBatch();
-    } else {
-      await startNewSession();
-    }
-  };
-
-  // Close sidebar overlay when clicking outside of it
-  // Keeps menu state consistent with user interactions
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (!menuOpen) return;
-      if (overlayRef.current && overlayRef.current.contains(e.target)) return;
-      if (menuToggleRef.current && menuToggleRef.current.contains(e.target)) return;
-      setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [menuOpen]);
-
-  // Render dashboard with three views controlled by `currentView`
   return (
     <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
       {showTutorial && (
@@ -1302,25 +1247,25 @@ function Dashboard({ user, token, onLogout }) {
       )}
 
       <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
-          <div className="menu-inner">
-            <div className="user-avatar">
-              {user && user.username ? user.username.substring(0, 2).toUpperCase() : 'U'}
-            </div>
-            <div className="user-name-sidebar">
-              {user && user.username ? user.username : 'User'}
-            </div>
-            <nav className="menu-items" aria-label="Main navigation">
-              <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setCameraError(null); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
-              <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
-              <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
-              <button type="button" onClick={() => { setCurrentView('hardware-controls'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-controls' ? 'active' : ''}`}>Hardware Controls</button>
-              <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
-              <button type="button" onClick={() => { setCurrentView('change-password'); setMenuOpen(false); }} className={`menu-item ${currentView === 'change-password' ? 'active' : ''}`}>Change Password</button>
-              <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
-            </nav>
-            <button className="logout-button overlay-logout" onClick={onLogout}>Sign Out</button>
+        <div className="menu-inner">
+          <div className="user-avatar">
+            {user && user.username ? user.username.substring(0, 2).toUpperCase() : 'U'}
           </div>
+          <div className="user-name-sidebar">
+            {user && user.username ? user.username : 'User'}
+          </div>
+          <nav className="menu-items" aria-label="Main navigation">
+            <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setCameraError(null); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
+            <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
+            <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
+            <button type="button" onClick={() => { setCurrentView('hardware-controls'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-controls' ? 'active' : ''}`}>Hardware Controls</button>
+            <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
+            <button type="button" onClick={() => { setCurrentView('change-password'); setMenuOpen(false); }} className={`menu-item ${currentView === 'change-password' ? 'active' : ''}`}>Change Password</button>
+            <button type="button" onClick={() => { openTutorial(); setMenuOpen(false); }} className="menu-item">Tutorial</button>
+          </nav>
+          <button className="logout-button overlay-logout" onClick={onLogout}>Sign Out</button>
         </div>
+      </div>
 
       <header className="dashboard-header di">
         <div className="header-content">
@@ -1329,7 +1274,8 @@ function Dashboard({ user, token, onLogout }) {
             <span />
             <span />
           </div>
-          <h1>MangoSort</h1>
+          {/* CHANGED: Header Title updated from MangoSort to MangoPain */}
+          <h1>MangoPain</h1>
         </div>
       </header>
 
@@ -1337,7 +1283,6 @@ function Dashboard({ user, token, onLogout }) {
         {currentView === 'dashboard' ? (
           <>
         <div className="dashboard-container">
-          {/* LEFT: Camera + Controls */}
           <div className="dashboard-left">
             <div className="welcome-card camera-feed-section">
               <div className="camera-controls">
@@ -1408,7 +1353,6 @@ function Dashboard({ user, token, onLogout }) {
             </div>
           </div>
 
-          {/* RIGHT: Statistics Cards */}
           <div className="dashboard-right">
             <h2 className="stats-title">Current Batch Statistics</h2>
             
@@ -1443,7 +1387,6 @@ function Dashboard({ user, token, onLogout }) {
           </>
         ) : currentView === 'hardware-status' ? (
           <>
-        {/* Hardware Status View */}
         <div className="sensor-status-container">
           <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Status</h2>
           
@@ -1489,14 +1432,11 @@ function Dashboard({ user, token, onLogout }) {
           </>
         ) : currentView === 'hardware-controls' ? (
           <>
-        {/* Hardware Controls View - Manual Gate Control */}
         <div className="hardware-controls-container">
           <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Controls</h2>
           <p style={{ color: '#666', marginBottom: '20px' }}>Manually operate sorting gates for testing and calibration.</p>
           
           <div className="control-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-            
-            {/* Small Gate */}
             <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.small === 'open' ? '#4caf50' : '#f44336'}` }}>
               <h3 style={{ marginTop: 0 }}>Small Mango Gate</h3>
               <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.small === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.small === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
@@ -1532,7 +1472,6 @@ function Dashboard({ user, token, onLogout }) {
               </div>
             </div>
 
-            {/* Medium Gate */}
             <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.medium === 'open' ? '#4caf50' : '#f44336'}` }}>
               <h3 style={{ marginTop: 0 }}>Medium Mango Gate</h3>
               <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.medium === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.medium === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
@@ -1568,7 +1507,6 @@ function Dashboard({ user, token, onLogout }) {
               </div>
             </div>
 
-            {/* Large Gate */}
             <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.large === 'open' ? '#4caf50' : '#f44336'}` }}>
               <h3 style={{ marginTop: 0 }}>Large Mango Gate</h3>
               <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.large === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.large === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
@@ -1608,7 +1546,6 @@ function Dashboard({ user, token, onLogout }) {
           </>
         ) : currentView === 'change-password' ? (
           <>
-            {/* Change Password View */}
             <div className="change-password-panel">
               <h2>Change Password</h2>
               <form onSubmit={handleChangePassword} style={{ display: 'grid', gap: '14px' }}>
@@ -1632,7 +1569,6 @@ function Dashboard({ user, token, onLogout }) {
           </>
         ) : currentView === 'settings' ? (
           <>
-            {/* Settings View */}
             <div className="settings-panel">
               <h2>Settings</h2>
 
@@ -1674,7 +1610,6 @@ function Dashboard({ user, token, onLogout }) {
           </>
         ) : (
           <>
-        {/* Session history table */}
         <div className="batch-history-container">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h2 style={{ margin: 0 }}>Sorting History (Sessions)</h2>

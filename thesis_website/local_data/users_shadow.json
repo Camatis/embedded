@@ -8,5 +8,10 @@
     "password": "$2b$10$OQ..bJDkpq9v.V2G3ZPY8.Aw0efWexu/6cmaGziENuDLwrbq6i7aS",
     "role": "user",
     "updatedAt": "2026-04-30T12:13:21.650Z"
+  },
+  "vinceee": {
+    "password": "$2b$10$aaZrQA6sEoDrNOkZBtJ6j.YtmXg1CFwHN9XSJC6kCvAgwf2RHLhni",
+    "role": "user",
+    "updatedAt": "2026-06-21T10:47:55.325Z"
   }
 }
