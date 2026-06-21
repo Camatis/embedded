@@ -3,12 +3,14 @@ import time
 import board
 import busio
 import threading 
-import subprocess 
+import subprocess
 import multiprocessing
 import cv2
 import numpy as np
 import signal
 import sys
+import zmq
+import json
 import requests
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
@@ -45,13 +47,15 @@ def cleanup_hardware():
             print('✅ Conveyor stopped')
         
         try:
+            set_hopper(HOPPER_REST)
             barrier_gate.angle = BARRIER_LOCKED
             small_gate.angle = GATE_CLOSED
             medium_gate.angle = GATE_CLOSED
             large_gate.angle = GATE_CLOSED
+            time.sleep(0.5)
             print('✅ Servo gates closed')
         except Exception as e:
-            print(f'⚠️ Error closing gates: {e}')
+            print(f'⚠️  Error closing gates: {e}')
         
         try:
             if 'pca' in globals():
@@ -63,7 +67,7 @@ def cleanup_hardware():
         GPIO.cleanup()
         print('✅ GPIO cleaned up')
     except Exception as e:
-        print(f'⚠️ Error during cleanup: {e}')
+        print(f'⚠️  Error during cleanup: {e}')
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
@@ -76,7 +80,7 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
 # --- IR Sensor Setup ---
-IR_TRIGGER_PIN = 17 
+IR_TRIGGER_PIN = 17  
 IR_MEDIUM_PIN = 27   
 IR_LARGE_PIN = 22    
 
@@ -105,7 +109,7 @@ current_conveyor_speed = 0
 conveyor_lock = threading.Lock()
 
 def set_conveyor_speed(target_speed):
-    global current_conveyor_speed
+    global current_conveyor_speed, conveyor_state
     target_speed = max(0, min(100, target_speed))
     with conveyor_lock:
         if target_speed == current_conveyor_speed:
@@ -117,6 +121,7 @@ def set_conveyor_speed(target_speed):
             time.sleep(CONVEYOR_RAMP_DELAY)
         conveyor_pwm.ChangeDutyCycle(target_speed)
         current_conveyor_speed = target_speed
+        conveyor_state = "running" if target_speed > 0 else "stopped"
         if target_speed == 0:
             time.sleep(0.12)
 
@@ -128,14 +133,36 @@ pca.frequency = 50
 barrier_gate = servo.Servo(pca.channels[0])
 medium_gate = servo.Servo(pca.channels[2])
 large_gate = servo.Servo(pca.channels[3])
-small_gate = servo.Servo(pca.channels[6])   
-rotating_gate = servo.ContinuousServo(pca.channels[12]) 
+small_gate = servo.Servo(pca.channels[6])
 
 # Servo Angles
 GATE_CLOSED = 70
 GATE_OPEN = 0
 BARRIER_LOCKED = 0
 BARRIER_RELEASED = 90
+
+# ==========================================
+# HOPPER RAW PWM CONTROL
+# ==========================================
+HOPPER_CHANNEL  = 12
+HOPPER_REST     = 512  # 180°
+HOPPER_90_TICK  = 307  # 90°
+HOPPER_0_TICK   = 102  # 0°
+HOPPER_FULL_TRAVEL = 1.5
+HOPPER_HALF_TRAVEL = 1.0
+
+def set_hopper(ticks):
+    pca.channels[HOPPER_CHANNEL].duty_cycle = int(ticks * 65535 / 4096)
+
+def initial_startup_drop():
+    print("\n🚀 Priming Hopper: Rotating to 0° for First Mango...")
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    set_hopper(HOPPER_0_TICK)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✅ First mango loaded into chamber.]")
 
 print("Locking sorting gates to default positions...")
 barrier_gate.angle = BARRIER_LOCKED
@@ -144,16 +171,19 @@ medium_gate.angle = GATE_CLOSED
 large_gate.angle = GATE_CLOSED
 time.sleep(1)
 
+print("Aligning Hopper Servo to rest position...")
+initial_startup_drop()
+time.sleep(2)
+
 # ==========================================
 # 2. TIMING VARIABLES 
 # ==========================================
+CAMERA_SCAN_DELAY = 4.0    
 SIZE_SCAN_DURATION = 3.0   
-TIME_TO_MEDIUM = 0.8  
-TIME_TO_LARGE = 2.2   
-SMALL_DROP_TIME = 2.0
-MEDIUM_DROP_TIME = 2.3 
-LARGE_DROP_TIME = 3.5  
-STOPPER_DELAY = 1.5 
+SMALL_DROP_TIME = 2.0      
+MEDIUM_DROP_TIME = 2.3     
+LARGE_DROP_TIME = 3.5      
+STOPPER_DELAY = 1.5        
 
 # ==========================================
 # 3. LIVE COUNTERS & STATE
@@ -166,6 +196,8 @@ count_total = 0
 
 sorting_active = False
 sorting_paused = False
+batch_state = "idle"  
+conveyor_state = "stopped"  
 state_lock = threading.Lock()
 last_mango = {"size": None, "health": None, "timestamp": None}
 
@@ -175,29 +207,12 @@ gate_states = {
     "large": "closed"
 }
 
+multi_detection_flag = False
+multi_detection_lock = threading.Lock()
+
 GPIO.output(R_EN, GPIO.HIGH)
 GPIO.output(L_EN, GPIO.HIGH)
-GPIO.output(LPWM, GPIO.LOW) 
-
-hopper_active = True 
-
-def pulse_hopper():
-    while hopper_active:
-        if not sorting_active:
-            time.sleep(0.1)
-            continue
-        rotating_gate.throttle = -0.15  
-        for _ in range(20):
-            if not hopper_active: return
-            time.sleep(0.1)
-        rotating_gate.throttle = 0.0    
-        for _ in range(30):
-            if not hopper_active: return
-            time.sleep(0.1)
-
-hopper_thread = threading.Thread(target=pulse_hopper)
-hopper_thread.daemon = True 
-hopper_thread.start()
+GPIO.output(LPWM, GPIO.LOW)
 
 # ==========================================
 # FLASK API ENDPOINTS
@@ -206,48 +221,61 @@ hopper_thread.start()
 def get_hardware_status():
     return jsonify({
         'counts': {'small': count_small, 'medium': count_medium, 'large': count_large, 'defective': count_defective, 'total': count_total},
-        'sensors': {
-            'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
-            'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
-            'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW
-        },
+        'sensors': {'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW, 'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW, 'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW},
         'state': 'active' if sorting_active else ('paused' if sorting_paused else 'idle'),
+        'batch_state': batch_state,
+        'conveyor_state': conveyor_state,
         'last_mango': last_mango
     })
 
 @app.route('/api/hardware/control', methods=['POST'])
 def hardware_control():
-    global sorting_active, sorting_paused
+    global sorting_active, sorting_paused, batch_state
     data = request.get_json()
     action = data.get('action')
     
     if action == 'start':
+        threading.Thread(target=initial_startup_drop).start()
         sorting_active = True
         sorting_paused = False
+        batch_state = 'running'
         set_conveyor_speed(CONVEYOR_SPEED)
-        return jsonify({'success': True, 'message': 'Sorting started'})
+        return jsonify({'success': True, 'message': 'Sorting started - priming hopper'})
     elif action == 'pause':
         sorting_active = False
         sorting_paused = True
+        batch_state = 'paused'
         set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting paused'})
     elif action == 'resume':
         sorting_active = True
         sorting_paused = False
+        batch_state = 'running'
         set_conveyor_speed(CONVEYOR_SPEED)
         return jsonify({'success': True, 'message': 'Sorting resumed'})
     elif action == 'stop':
         sorting_active = False
         sorting_paused = False
+        batch_state = 'stopped'
         set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting stopped'})
-    
     return jsonify({'success': False, 'message': 'Invalid action'})
 
-@app.route('/api/hardware/gate', methods=['POST'])
+@app.route('/api/hardware/gate', methods=['GET', 'POST'])
 def control_gate_manual():
     global gate_states
-    data = request.get_json()
+    
+    if request.method == 'GET':
+        return jsonify({
+            'gate_states': gate_states,
+            'gate_angles': {
+                'small': small_gate.angle if hasattr(small_gate, 'angle') else None,
+                'medium': medium_gate.angle if hasattr(medium_gate, 'angle') else None,
+                'large': large_gate.angle if hasattr(large_gate, 'angle') else None
+            }
+        })
+        
+    data = request.get_json() or {}
     gate_name = data.get('gate')
     action = data.get('action')
     try:
@@ -274,68 +302,141 @@ def control_gate_manual():
                 gate_states['large'] = 'closed'
             return jsonify({'success': True, 'message': f'{gate_name} gate closed', 'gate_states': gate_states})
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
-    return jsonify({'success': False, 'message': 'Invalid gate or action'})
+        return jsonify({'success': False, 'message': str(e)}), 500
+    return jsonify({'success': False, 'message': 'Invalid gate or action'}), 400
 
-def operate_stopper():
+@app.route('/api/hardware/reset-counts', methods=['POST'])
+def reset_counts():
+    global count_small, count_medium, count_large, count_defective, count_total, last_mango
+    count_small = count_medium = count_large = count_defective = count_total = 0
+    last_mango = {"size": None, "health": None, "timestamp": datetime.now().isoformat()}
+    return jsonify({'success': True, 'message': 'All counts reset to zero'})
+
+@app.route('/api/hardware/detection', methods=['GET'])
+def get_detection_status():
+    global multi_detection_flag
+    with multi_detection_lock:
+        flag = multi_detection_flag
+        multi_detection_flag = False
+    return jsonify({'multi_detection': flag})
+
+# ==========================================
+# 4. ROUTING SYSTEMS
+# ==========================================
+def operate_hopper_cycle():
+    print("   🔄 HOPPER: Cycling next mango...")
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    set_hopper(HOPPER_90_TICK)
+    time.sleep(HOPPER_HALF_TRAVEL)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    print("   [✓ Next mango loaded into chamber]")
+
+def execute_defective_delivery():
+    print("   🚨 EXECUTING DEFECTIVE DELIVERY ROUTE...")
+    set_conveyor_speed(CONVEYOR_SPEED)
+    print("   🔄 OPENING STOPPER GATE...")
     barrier_gate.angle = BARRIER_RELEASED
-    time.sleep(STOPPER_DELAY)
+    time.sleep(LARGE_DROP_TIME)
     barrier_gate.angle = BARRIER_LOCKED
-    print("   [Stopper Locked]")
+    print("   [✓ Stopper Locked]")
+    operate_hopper_cycle()
 
-def route_small():
-    global gate_states
-    print("   [Small Gate Opened]")
+def execute_small_delivery():
+    print("   🎯 SMALL ROUTE: Opening small gate and stopper gate simultaneously...")
     small_gate.angle = GATE_OPEN
+    barrier_gate.angle = BARRIER_RELEASED
     gate_states['small'] = 'open'
-    time.sleep(SMALL_DROP_TIME) 
+    time.sleep(SMALL_DROP_TIME)
     small_gate.angle = GATE_CLOSED
+    barrier_gate.angle = BARRIER_LOCKED
     gate_states['small'] = 'closed'
-    print("   [Small Gate Closed]")
+    print("   [✓ Small gate & Stopper closed]")
+    operate_hopper_cycle()
 
-def route_medium():
-    global gate_states
-    time.sleep(TIME_TO_MEDIUM)
-    print("   [Medium Gate Opened]")
+def execute_medium_delivery():
+    print("   🎯 MEDIUM ROUTE: Opening stopper...")
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(0.8) 
+    print("   🎯 Opening medium gate...")
     medium_gate.angle = GATE_OPEN
     gate_states['medium'] = 'open'
-    time.sleep(MEDIUM_DROP_TIME) 
+    time.sleep(MEDIUM_DROP_TIME)
     medium_gate.angle = GATE_CLOSED
+    barrier_gate.angle = BARRIER_LOCKED
     gate_states['medium'] = 'closed'
-    print("   [Medium Gate Closed]")
+    print("   [✓ Medium gate & Stopper closed]")
+    operate_hopper_cycle()
 
-def route_large():
-    global gate_states
-    time.sleep(TIME_TO_LARGE)
-    print("   [Large Gate Opened]")
+def execute_large_delivery():
+    print("   🎯 LARGE ROUTE: Opening stopper...")
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(2.2) 
+    print("   🎯 Opening large gate...")
     large_gate.angle = GATE_OPEN
     gate_states['large'] = 'open'
-    time.sleep(LARGE_DROP_TIME) 
+    time.sleep(LARGE_DROP_TIME)
     large_gate.angle = GATE_CLOSED
+    barrier_gate.angle = BARRIER_LOCKED
     gate_states['large'] = 'closed'
-    print("   [Large Gate Closed]")
+    print("   [✓ Large gate & Stopper closed]")
+    operate_hopper_cycle()
+
+# ==========================================
+# 5. MAIN AUTONOMOUS SENSOR LOOP
+# ==========================================
+def are_all_gates_default():
+    ANGLE_TOLERANCE = 5
+    return (
+        abs(small_gate.angle - GATE_CLOSED) <= ANGLE_TOLERANCE and
+        abs(medium_gate.angle - GATE_CLOSED) <= ANGLE_TOLERANCE and
+        abs(large_gate.angle - GATE_CLOSED) <= ANGLE_TOLERANCE and
+        abs(barrier_gate.angle - BARRIER_LOCKED) <= ANGLE_TOLERANCE
+    )
 
 def scan_for_defect():
+    print(f"🧠 Camera scanning for defects ({CAMERA_SCAN_DELAY} seconds)...")
+    time.sleep(CAMERA_SCAN_DELAY)
+    
     is_defective = False
-    try:
-        headers = {'Connection': 'close'}
-        response = requests.get('http://127.0.0.1:8082/detection', headers=headers, timeout=1.5)
-        if response.status_code == 200:
-            detection_data = response.json()
-            detections_list = detection_data.get('detections', [])
-            for d in detections_list:
-                cls_name = str(d.get('class', '')).strip().lower()
-                if 'not' not in cls_name and ('defect' in cls_name or 'bad' in cls_name or 'damaged' in cls_name or 'rotten' in cls_name):
-                    is_defective = True
-    except Exception as e:
-        print(f"⚠️ API Fetch error: {e}")
+    detection_received = False
+    retry_count = 0
+    max_retries = 40  
+    
+    while not detection_received and retry_count < max_retries:
+        try:
+            headers = {'Connection': 'close'}
+            response = requests.get('http://127.0.0.1:8082/detection', headers=headers, timeout=2)
+            if response.status_code == 200:
+                detection_data = response.json()
+                detections_list = detection_data.get('detections', [])
+                multi_detection = detection_data.get('multi_detection', False)
+                detection_received = True
+                
+                for d in detections_list:
+                    cls_name = str(d.get('class', '')).strip().lower()
+                    if 'not' not in cls_name and ('defect' in cls_name or 'bad' in cls_name or 'damaged' in cls_name or 'rotten' in cls_name):
+                        is_defective = True
+                
+                if multi_detection:
+                    with multi_detection_lock:
+                        global multi_detection_flag
+                        multi_detection_flag = True
+            else:
+                retry_count += 1
+                time.sleep(0.1)
+        except:
+            retry_count += 1
+            time.sleep(0.1)
+            
     return is_defective
 
 def flip_mango_for_second_scan():
-    # SET TO 0.5 SECONDS
-    print("▶️ RUNNING CONVEYOR FOR 0.5 SECONDS TO FLIP MANGO...")
+    # CHANGED: Adjusted flip interval window bounds to exactly 0.3 seconds
+    print("▶️  RUNNING CONVEYOR FOR 0.3 SECONDS TO FLIP MANGO...")
     set_conveyor_speed(CONVEYOR_SPEED)
-    time.sleep(0.5)
+    time.sleep(0.3)
     print("🛑 STOPPING CONVEYOR...")
     set_conveyor_speed(0)
 
@@ -347,81 +448,79 @@ def autonomous_sorting_loop():
             if not sorting_active:
                 time.sleep(0.1)
                 continue
-                
+            
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
+                if not are_all_gates_default():
+                    time.sleep(0.1)
+                    continue
+                
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
-                print("🛑 STOPPING BELT FOR FIRST SIDE SCAN...")
+                print("🛑 STOPPING BELT FOR FIRST SCAN...")
                 set_conveyor_speed(0)
-                time.sleep(0.2)
                 
                 # --- SCAN SIDE 1 ---
                 if scan_for_defect():
-                    print("🎯 DECISION: Side 1 is DEFECTIVE. Instant Rejection.")
+                    print("🚨 DEFECTIVE on first side → INSTANT REJECTION!")
                     count_total += 1
                     count_defective += 1
-                    last_mango = {"size": "NONE", "health": "DEFECTIVE", "timestamp": datetime.now().isoformat()}
-                    threading.Thread(target=operate_stopper).start()
-                    while GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW: time.sleep(0.05)
-                    time.sleep(0.2)
-                    set_conveyor_speed(CONVEYOR_SPEED)
+                    last_mango = {"size": None, "health": "DEFECTIVE", "timestamp": datetime.now().isoformat()}
+                    execute_defective_delivery()
+                    print("✅ Chamber clear. Ready for next mango.\n")
                     continue
-
-                # --- FLIP STEP (0.5s) ---
+                
+                # --- FLIP STEP (0.3s) ---
+                print("✅ GOOD on first side → Flipping mango for second scan...")
                 flip_mango_for_second_scan()
-                time.sleep(0.2)
                 
                 # --- SCAN SIDE 2 ---
                 if scan_for_defect():
-                    print("🎯 DECISION: Side 2 is DEFECTIVE. Routing to reject bin.")
+                    print("🚨 DEFECTIVE on second side → INSTANT REJECTION!")
                     count_total += 1
                     count_defective += 1
-                    last_mango = {"size": "NONE", "health": "DEFECTIVE", "timestamp": datetime.now().isoformat()}
-                    threading.Thread(target=operate_stopper).start()
-                    while GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW: time.sleep(0.05)
-                    time.sleep(0.2)
-                    set_conveyor_speed(CONVEYOR_SPEED)
+                    last_mango = {"size": None, "health": "DEFECTIVE", "timestamp": datetime.now().isoformat()}
+                    execute_defective_delivery()
+                    print("✅ Chamber clear. Ready for next mango.\n")
                     continue
-
-                # --- BOTH SIDES GOOD: RUN SIZING SENSOR TRACK ---
-                print("🎯 DECISION: Mango skin is healthy! Starting sizing run...")
+                
+                # --- NOT DEFECTIVE ROUTE SYSTEM ---
+                print("✅ GOOD on both sides → Executing sizing track run...")
+                count_total += 1
+                
+                print(f"▶️  STARTING BELT FOR SIZE DETECTION ({SIZE_SCAN_DURATION} seconds)...")
                 set_conveyor_speed(CONVEYOR_SPEED)
                 
-                detected_size = "SMALL" 
+                detected_size = "SMALL"
                 end_time = time.time() + SIZE_SCAN_DURATION
                 while time.time() < end_time:
                     if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
                         detected_size = "LARGE"
                     elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
                         detected_size = "MEDIUM"
-                    time.sleep(0.01) 
-
-                threading.Thread(target=operate_stopper).start() 
+                    time.sleep(0.01)
                 
-                count_total += 1
+                print(f"📏 Size scan complete → Detected: {detected_size}")
                 if detected_size == "SMALL":
                     count_small += 1
-                    threading.Thread(target=route_small).start()
+                    last_mango = {"size": "SMALL", "health": "GOOD", "timestamp": datetime.now().isoformat()}
+                    execute_small_delivery()
                 elif detected_size == "MEDIUM":
                     count_medium += 1
-                    threading.Thread(target=route_medium).start()
+                    last_mango = {"size": "MEDIUM", "health": "GOOD", "timestamp": datetime.now().isoformat()}
+                    execute_medium_delivery()
                 elif detected_size == "LARGE":
                     count_large += 1
-                    threading.Thread(target=route_large).start()
+                    last_mango = {"size": "LARGE", "health": "GOOD", "timestamp": datetime.now().isoformat()}
+                    execute_large_delivery()
                 
-                last_mango = {
-                    "size": detected_size,
-                    "health": "GOOD",
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                print("-" * 50)
+                print("-" * 60)
                 print(f"📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}")
-                print("-" * 50)
+                print("-" * 60)
                 
+                print("⏳ Waiting for mango tail to clear trigger sensor...")
                 while GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                     time.sleep(0.05) 
                 time.sleep(0.2)
-                print("✅ Chamber clear. Ready for the next mango.")
+                print("✅ Chamber clear. Ready for next mango.\n")
 
             time.sleep(0.01)
         except Exception as e:
@@ -437,7 +536,7 @@ flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000
 flask_thread.daemon = True
 flask_thread.start()
 
-print("✅ MangoPain Hardware core listening on port 5000")
+print("✅ MangoPain Core listening on port 5000")
 
 try:
     while True:

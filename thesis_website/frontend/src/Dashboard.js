@@ -6,7 +6,7 @@ function Dashboard({ user, token, onLogout }) {
   // Main view state
   const [currentView, setCurrentView] = useState('dashboard');
   
-  // FIXED: Missing camera string, connection, and error states to prevent compiler crashes
+  // Camera string, connection, and error states to prevent compiler crashes
   const [cameraStatus, setCameraStatus] = useState('Disconnected');
   const [cameraError, setCameraError] = useState('');
   const [webrtcReady, setWebrtcReady] = useState(false);
@@ -63,6 +63,7 @@ function Dashboard({ user, token, onLogout }) {
   const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
   const [limitAlert, setLimitAlert] = useState('');
   const [showLimitAlert, setShowLimitAlert] = useState(false);
+  const [showTwoMangoesPopup, setShowTwoMangoesPopup] = useState(false);
   
   // Gate state tracking
   const [gateStates, setGateStates] = useState({
@@ -558,6 +559,32 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
+  // Poll detection status for multi-mango alerts
+  useEffect(() => {
+    let mounted = true;
+    const pollDetectionStatus = async () => {
+      try {
+        const apiUrl = `${BACKEND_URL}/api/hardware/detection`;
+        const res = await fetch(apiUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (mounted && data.multi_detection === true) {
+            setShowTwoMangoesPopup(true);
+            console.log('🥭🥭 Multiple mangoes detected!');
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching detection status', err);
+      }
+    };
+    
+    const intervalId = setInterval(pollDetectionStatus, 500);
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+    };
+  }, []);
+
   const clearSessions = async () => {
     try {
       const apiUrl = `${BACKEND_URL}/api/sessions`;
@@ -624,7 +651,7 @@ function Dashboard({ user, token, onLogout }) {
       doc.setTextColor('#011627');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.text('AUTOMATED MANGO SORTING SYSTEM', margin, 15);
+      doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGOPAIN)', margin, 15);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'normal');
       doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
@@ -939,6 +966,15 @@ function Dashboard({ user, token, onLogout }) {
           </div>
         </div>
       )}
+      {showTwoMangoesPopup && (
+        <div className="tutorial-overlay" onClick={() => setShowTwoMangoesPopup(false)}>
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => setShowTwoMangoesPopup(false)}>✕</div>
+            <h3 style={{ color: 'orange' }}>⚠️ More than one mango detected</h3>
+            <p>Multiple mangoes were detected on the conveyor. Please inspect the system.</p>
+          </div>
+        </div>
+      )}
       {showTempPopup && (
         <div className="tutorial-overlay" onClick={() => setShowTempPopup(false)}>
           <div className="tutorial-box">
@@ -977,7 +1013,7 @@ function Dashboard({ user, token, onLogout }) {
             <span />
             <span />
           </div>
-          <h1>MangoSort</h1>
+          <h1>MangoPain</h1>
         </div>
       </header>
 
@@ -997,7 +1033,7 @@ function Dashboard({ user, token, onLogout }) {
                     muted
                     style={{ 
                       width: '100%', 
-                      maxWidth: '480px', // Matches your backend configuration dimensions perfectly
+                      maxWidth: '480px', 
                       aspectRatio: '4 / 3', 
                       objectFit: 'cover', 
                       borderRadius: '12px', 
@@ -1112,7 +1148,7 @@ function Dashboard({ user, token, onLogout }) {
         ) : (
           <div className="batch-history-container">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0 }}>Sorting History (Sessions)</h2>
+              <h2>Sorting History (Sessions)</h2>
               <div>
                 <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
                 <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
