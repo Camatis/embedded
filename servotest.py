@@ -7,9 +7,27 @@ PIN_RED_LED = 6
 PIN_BUZZER = 16
 
 # --- System State Variables ---
-ui_popup_active = False  # This should be updated via your Express API polling
-machine_state = "READY"  # States: READY, SCANNING, PAUSED, STOPPED
+ui_popup_active = False  
+machine_state = "READY"  
 
+# ==========================================
+# MISSING MOTOR PLACEHOLDERS (Add your real I2C/Motor code here later)
+# ==========================================
+def stop_conveyor():
+    print("[HARDWARE] Conveyor Stopped")
+
+def start_conveyor():
+    print("[HARDWARE] Conveyor Started")
+
+def reverse_conveyor():
+    print("[HARDWARE] Conveyor Reversed")
+
+def reset_servos_to_default():
+    print("[HARDWARE] Servos reset to default closed positions")
+
+# ==========================================
+# YOUR EXISTING LOGIC
+# ==========================================
 def setup_gpio():
     GPIO.setmode(GPIO.BCM)
     GPIO.setwarnings(False)
@@ -17,74 +35,82 @@ def setup_gpio():
     GPIO.setup(PIN_RED_LED, GPIO.OUT)
     GPIO.setup(PIN_BUZZER, GPIO.OUT)
     set_machine_ready()
+    print("✓ GPIO Setup Complete. Machine is READY.")
 
-# --- Task 1: Red and Green Lights ---
 def set_machine_ready():
-    """Green LED active, Red LED off. Ready for new mango."""
     GPIO.output(PIN_GREEN_LED, GPIO.HIGH)
     GPIO.output(PIN_RED_LED, GPIO.LOW)
 
 def set_machine_scanning():
-    """Red LED active, Green LED off. Mango in transit/scanning."""
     GPIO.output(PIN_GREEN_LED, GPIO.LOW)
     GPIO.output(PIN_RED_LED, GPIO.HIGH)
 
-# --- Task 2: Buzzer & Multi-Mango Detection ---
 def handle_multi_mango_error():
-    """Triggered when YOLO/Sensors detect 2+ mangoes."""
     global machine_state, ui_popup_active
-    
+    print("⚠ ERROR: MULTIPLE MANGOES DETECTED!")
     machine_state = "PAUSED"
-    stop_conveyor()                 # Call your motor stop function
-    reset_servos_to_default()       # Call your PCA9685 reset function
+    stop_conveyor()                 
+    reset_servos_to_default()       
     
     # Trigger buzzer
     GPIO.output(PIN_BUZZER, GPIO.HIGH)
     time.sleep(1.5)
     GPIO.output(PIN_BUZZER, GPIO.LOW)
     
-    # Wait until React UI confirms the popup is closed
-    while ui_popup_active:
-        time.sleep(0.5) 
-        # In reality, this flag updates via a ZMQ message or API poll from React
+    # Simulate waiting for UI to clear
+    print("Waiting for operator to clear UI popup...")
+    time.sleep(3) # Placeholder for UI wait
         
+    print("UI Cleared. Resuming...")
     start_conveyor()
     machine_state = "READY"
 
-# --- Task 3 & 4: Pause and Stop Logic ---
 def execute_pause():
-    """Immediately halts physical movement without finalizing data."""
     global machine_state
     machine_state = "PAUSED"
     stop_conveyor()
-    print("System Paused. Current batch counts retained in RAM.")
+    print("⏸ System Paused. Current batch counts retained in RAM.")
 
 def execute_stop():
-    """Terminates process, safes hardware, and preps for shutdown/new batch."""
     global machine_state
     machine_state = "STOPPED"
     stop_conveyor()
     reset_servos_to_default()
-    set_machine_ready() # Reset lights
-    print("System Stopped. Hardware returned to safe defaults.")
+    set_machine_ready() 
+    print("🛑 System Stopped. Hardware returned to safe defaults.")
 
-# --- Task 5 & 6: Rejection Routines (Non-Organic / Not Carabao) ---
 def execute_rejection(reason):
-    """Handles items that fail the variety or organic checks."""
-    # reason can be "NON_ORGANIC" or "NOT_CARABAO"
-    
+    print(f"🚫 REJECTION TRIGGERED: {reason}")
     stop_conveyor()
     
-    # Trigger Buzzer alert
     GPIO.output(PIN_BUZZER, GPIO.HIGH)
     time.sleep(0.5)
     GPIO.output(PIN_BUZZER, GPIO.LOW)
     
-    # Reverse conveyor to eject the item
     reverse_conveyor()              
-    time.sleep(2.0)                 # Run reverse for 2 seconds
+    time.sleep(2.0)                 
     stop_conveyor()
     
-    # Note: The UI pop-up ("No Carabao Mangoes Detected") must be triggered 
-    # by sending a JSON flag through your API gateway to the React frontend.
     set_machine_ready()
+
+# ==========================================
+# THE EXECUTION LOOP (This makes it run!)
+# ==========================================
+if __name__ == '__main__':
+    try:
+        # 1. Initialize everything
+        setup_gpio()
+        
+        # 2. Keep the script alive
+        print("\n--- MangPain Hardware Loop Started ---")
+        print("Press CTRL+C to safely exit and cleanup GPIO.")
+        
+        while True:
+            # For now, it just loops safely. 
+            # Later, your ZMQ subscriber or Flask API will trigger the functions here.
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        # 3. Clean up safely when you stop the script
+        print("\nForce quitting... Cleaning up GPIO pins.")
+        GPIO.cleanup()
