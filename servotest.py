@@ -88,6 +88,35 @@ GPIO.setup(IR_TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(IR_MEDIUM_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(IR_LARGE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+# --- LED & Buzzer Setup ---
+GREEN_LED = 5
+RED_LED = 6
+BUZZER = 24
+ENTRANCE_SENSOR = 23
+
+GPIO.setup(GREEN_LED, GPIO.OUT)
+GPIO.setup(RED_LED, GPIO.OUT)
+GPIO.setup(BUZZER, GPIO.OUT)
+GPIO.setup(ENTRANCE_SENSOR, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+def set_led(status):
+    """Set LED status: 'ready', 'scanning', 'off'"""
+    if status == "ready":
+        GPIO.output(GREEN_LED, GPIO.HIGH)
+        GPIO.output(RED_LED, GPIO.LOW)
+    elif status == "scanning":
+        GPIO.output(GREEN_LED, GPIO.LOW)
+        GPIO.output(RED_LED, GPIO.HIGH)
+    else:
+        GPIO.output(GREEN_LED, GPIO.LOW)
+        GPIO.output(RED_LED, GPIO.LOW)
+
+def trigger_buzzer(duration=0.5):
+    """Sound buzzer for given duration"""
+    GPIO.output(BUZZER, GPIO.HIGH)
+    time.sleep(duration)
+    GPIO.output(BUZZER, GPIO.LOW)
+
 # --- DC Motor Setup (Conveyor) ---
 RPWM = 12
 LPWM = 13
@@ -209,6 +238,12 @@ gate_states = {
 
 multi_detection_flag = False
 multi_detection_lock = threading.Lock()
+
+# Entrance sensor & rejection tracking
+entrance_blocked_time = None
+entrance_blocked_lock = threading.Lock()
+rejection_active = False
+rejection_type = None  # 'multi_mango', 'not_detected', 'not_carabao'
 
 GPIO.output(R_EN, GPIO.HIGH)
 GPIO.output(L_EN, GPIO.HIGH)
@@ -442,19 +477,51 @@ def flip_mango_for_second_scan():
 
 def autonomous_sorting_loop():
     global sorting_active, sorting_paused, count_small, count_medium, count_large, count_defective, count_total, last_mango
+    global rejection_active, rejection_type, entrance_blocked_time
     
     while True:
         try:
             if not sorting_active:
+                set_led("off")
                 time.sleep(0.1)
                 continue
+            
+            # Set green LED when ready (not actively processing)
+            if rejection_active:
+                set_led("scanning")
+            else:
+                set_led("ready")
+            
+            # Check entrance sensor for objects during ready state
+            if not rejection_active and GPIO.input(ENTRANCE_SENSOR) == GPIO.LOW:
+                with entrance_blocked_lock:
+                    if entrance_blocked_time is None:
+                        entrance_blocked_time = time.time()
             
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
                 if not are_all_gates_default():
                     time.sleep(0.1)
                     continue
                 
+                # Set red LED during scanning
+                set_led("scanning")
+                
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
+                
+                # Check for entrance sensor activation during scan - object at entry
+                entrance_sensor_triggered = False
+                if GPIO.input(ENTRANCE_SENSOR) == GPIO.LOW:
+                    entrance_sensor_triggered = True
+                    print("⚠️  ENTRANCE SENSOR TRIGGERED - Object detected at entry during scan!")
+                    trigger_buzzer(0.5)
+                    set_conveyor_speed(0)
+                    # Wait for entrance sensor to clear
+                    while GPIO.input(ENTRANCE_SENSOR) == GPIO.LOW:
+                        time.sleep(0.05)
+                    print("✅ Entrance sensor cleared, resuming...")
+                    if not sorting_active:
+                        break
+                
                 print("🛑 STOPPING BELT FOR FIRST SCAN...")
                 set_conveyor_speed(0)
                 
@@ -464,11 +531,13 @@ def autonomous_sorting_loop():
                     count_total += 1
                     count_defective += 1
                     last_mango = {"size": None, "health": "DEFECTIVE", "timestamp": datetime.now().isoformat()}
+                    trigger_buzzer(0.3)
                     execute_defective_delivery()
                     print("✅ Chamber clear. Ready for next mango.\n")
+                    set_led("ready")
                     continue
                 
-                # --- FLIP STEP (0.3s) ---
+                # --- FLIP STEP (0.2s) ---
                 print("✅ GOOD on first side → Flipping mango for second scan...")
                 flip_mango_for_second_scan()
                 
@@ -478,8 +547,10 @@ def autonomous_sorting_loop():
                     count_total += 1
                     count_defective += 1
                     last_mango = {"size": None, "health": "DEFECTIVE", "timestamp": datetime.now().isoformat()}
+                    trigger_buzzer(0.3)
                     execute_defective_delivery()
                     print("✅ Chamber clear. Ready for next mango.\n")
+                    set_led("ready")
                     continue
                 
                 # --- NOT DEFECTIVE ROUTE SYSTEM ---
@@ -490,8 +561,17 @@ def autonomous_sorting_loop():
                 set_conveyor_speed(CONVEYOR_SPEED)
                 
                 detected_size = "SMALL"
+                multi_detection_triggered = False
+                detection_start_time = time.time()
+                
                 end_time = time.time() + SIZE_SCAN_DURATION
                 while time.time() < end_time:
+                    # Check for multi-mango detection (entrance sensor triggered during belt movement)
+                    if GPIO.input(ENTRANCE_SENSOR) == GPIO.LOW:
+                        multi_detection_triggered = True
+                        print("\n🚨 MULTI-MANGO DETECTED - Entrance sensor triggered during belt movement!")
+                        break
+                    
                     if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
                         detected_size = "LARGE"
                     elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
@@ -499,6 +579,37 @@ def autonomous_sorting_loop():
                     time.sleep(0.01)
                 
                 print(f"📏 Size scan complete → Detected: {detected_size}")
+                
+                # Handle multi-mango rejection
+                if multi_detection_triggered:
+                    print("🔴 MULTI-MANGO REJECTION!")
+                    trigger_buzzer(0.5)
+                    set_conveyor_speed(0)
+                    rejection_active = True
+                    rejection_type = "multi_mango"
+                    
+                    # Reverse conveyor until entrance sensor detects object
+                    print("▶️  REVERSING CONVEYOR - waiting for entrance sensor...")
+                    set_conveyor_speed(-CONVEYOR_SPEED)
+                    
+                    entrance_detected = False
+                    while sorting_active:
+                        if GPIO.input(ENTRANCE_SENSOR) == GPIO.LOW:
+                            entrance_detected = True
+                            print("✅ Entrance sensor detected object, stopping conveyor")
+                            set_conveyor_speed(0)
+                            break
+                        time.sleep(0.05)
+                    
+                    rejection_active = False
+                    rejection_type = None
+                    with entrance_blocked_lock:
+                        entrance_blocked_time = time.time()  # Block until manually cleared
+                    print("⏸️  PAUSED - waiting for manual intervention to clear entrance\n")
+                    set_led("scanning")
+                    continue
+                
+                # Normal size delivery
                 if detected_size == "SMALL":
                     count_small += 1
                     last_mango = {"size": "SMALL", "health": "GOOD", "timestamp": datetime.now().isoformat()}
@@ -521,6 +632,7 @@ def autonomous_sorting_loop():
                     time.sleep(0.05) 
                 time.sleep(0.2)
                 print("✅ Chamber clear. Ready for next mango.\n")
+                set_led("ready")
 
             time.sleep(0.01)
         except Exception as e:

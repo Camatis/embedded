@@ -1071,14 +1071,8 @@ function Dashboard({ user, token, onLogout }) {
       }
 
       setHardwareAlert('Stopping batch...');
-      const currentCounts = {
-        small: countsRef.current.small,
-        medium: countsRef.current.medium,
-        large: countsRef.current.large,
-        defective: countsRef.current.defective,
-        total: countsRef.current.total
-      };
 
+      // Stop hardware and conveyor
       const stopResult = await stopHardware();
       const conveyorResult = await controlConveyor('stop');
 
@@ -1093,38 +1087,7 @@ function Dashboard({ user, token, onLogout }) {
       setSessionActive(false);
       setSessionPaused(false);
       setCurrentSessionId(null);
-
-      const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
-      const res = await fetch(apiUrl, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          counts: {
-            small: currentCounts.small,
-            medium: currentCounts.medium,
-            large: currentCounts.large,
-            defective: currentCounts.defective
-          },
-          quality_stats: {
-            non_defective: currentCounts.small + currentCounts.medium + currentCounts.large,
-            defective: currentCounts.defective,
-            total: currentCounts.total
-          },
-          timestamps: { end_time: new Date() }
-        })
-      });
-
-      if (res.ok) {
-        setHardwareAlert('Batch stopped and finalized');
-      } else {
-        console.error('Failed to save final batch counts');
-        setHardwareAlert('Batch stopped, but failed to save final batch counts');
-      }
-
-      setTimeout(() => { fetchSessions(); }, 500);
+      setHardwareAlert('Batch stopped - motors returned to default position');
     } catch (err) {
       console.error('Error ending batch', err);
       setHardwareAlert('Error stopping batch');
@@ -1139,48 +1102,24 @@ function Dashboard({ user, token, onLogout }) {
         setSessionPaused(false);
         return;
       }
-      const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
-      const res = await fetch(apiUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          counts: {
-            small: countsRef.current.small,
-            medium: countsRef.current.medium,
-            large: countsRef.current.large,
-            defective: countsRef.current.defective
-          },
-          quality_stats: {
-            non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
-            defective: countsRef.current.defective,
-            total: countsRef.current.total
-          }
-        })
-      });
-      if (res.ok) {
-        try {
-          await fetch(`${BACKEND_URL}/api/hardware/control`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'pause' })
-          });
-        } catch (err) {
-          console.error('Error pausing sorting process:', err);
-        }
 
-        await controlConveyor('pause');
-        setSessionActive(false);
-        setSessionPaused(true);
-        setHardwareAlert('Batch paused - you may continue or stop batch');
-        setTimeout(() => { fetchSessions(); }, 500);
-      } else {
-        console.error('Failed to pause session');
+      // Just pause hardware and conveyor - don't save batch data
+      try {
+        await fetch(`${BACKEND_URL}/api/hardware/control`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'pause' })
+        });
+      } catch (err) {
+        console.error('Error pausing sorting process:', err);
       }
+
+      await controlConveyor('pause');
+      setSessionActive(false);
+      setSessionPaused(true);
+      setHardwareAlert('Batch paused - you may continue or stop batch');
     } catch (err) {
-      console.error('Error pausing session', err);
+      console.error('Error pausing batch', err);
     }
   };
 
@@ -1597,7 +1536,6 @@ function Dashboard({ user, token, onLogout }) {
             <h2 style={{ margin: 0 }}>Sorting History (Sessions)</h2>
             <div>
               <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
-              <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
             </div>
           </div>
           <div className="history-table-container">

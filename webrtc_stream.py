@@ -287,11 +287,13 @@ class CameraTrack(VideoStreamTrack):
 
 def draw_detection_boxes(frame, boxes):
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        color = (0, 255, 0)  
+        color = (0, 255, 0)  # Green for normal carabao
         if cls_name:
             cn = str(cls_name).strip().lower()
-            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                color = (255, 0, 0)  
+            if 'not' in cn or 'carabao' not in cn:
+                color = (255, 0, 255)  # Blue (BGR) for not-carabao
+            elif 'defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn:
+                color = (0, 0, 255)  # Red for defective
         
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{cls_name or 'Mango'} {conf:.2f}"
