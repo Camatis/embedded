@@ -33,7 +33,7 @@ def cleanup_hardware():
     global sorting_active, sorting_paused, hopper_active, conveyor_pwm
     print('🛑 Stopping all hardware...')
     try:
-        # Reset LEDs
+        # Reset LEDs and Buzzer
         GPIO.output(GREEN_LED, GPIO.LOW)
         GPIO.output(RED_LED, GPIO.LOW)
         GPIO.output(BUZZER, GPIO.LOW)
@@ -90,7 +90,7 @@ IR_LARGE_PIN = 22
 # --- LEDs & Buzzer ---
 GREEN_LED = 5
 RED_LED = 6
-BUZZER = 16
+BUZZER = 24 # Buzzer updated to GPIO 24
 
 GPIO.setup(IR_TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(IR_MEDIUM_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -246,4 +246,4 @@ flask_thread.start()
 try:
     while True: time.sleep(1)
 except KeyboardInterrupt:
-    cleanup_hardware()
+    cleanup_hardware() 
