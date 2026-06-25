@@ -196,7 +196,15 @@ def detection():
 
 # --- Main Initialization ---
 if __name__ == '__main__':
-    # Initialize hardware
+    def run_flask():
+        print('✅ Starting HTTP server on http://127.0.0.1:8082')
+        print('✅ HTTP routes available: POST /offer, GET /detection')
+        app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
+
+    threading.Thread(target=run_flask, daemon=True).start()
+    time.sleep(0.2)
+
+    print('🚀 Initializing camera and YOLO...')
     camera = Picamera2()
     camera.configure(camera.create_video_configuration(main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"}))
     camera.start()
@@ -224,5 +232,9 @@ if __name__ == '__main__':
     # Start threads
     threading.Thread(target=lambda: capture_loop(camera), daemon=True).start()
     threading.Thread(target=background_detect, daemon=True).start()
-    
-    app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print('🛑 Shutting down...')
