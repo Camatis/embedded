@@ -45,6 +45,7 @@ function Dashboard({ user, token, onLogout }) {
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
   const autoSaveIntervalRef = useRef(null);
   const previousDefectiveStateRef = useRef(false);
+  const previousTwoMangoesStateRef = useRef(false);
 
   // Persistence: Restore session on load
   useEffect(() => {
@@ -56,11 +57,12 @@ function Dashboard({ user, token, onLogout }) {
         if (res.ok) {
           const active = await res.json();
           if (active) {
-            setCurrentSessionId(active._id);
+            const counts = active.counts || { small: 0, medium: 0, large: 0, defective: 0, total: 0 };
+            setCurrentSessionId(active._id || active.id || null);
             setSessionActive(true);
-            setSortingStats(active.counts);
-            countsRef.current = active.counts;
-            startAutoSave(active._id);
+            setSortingStats(counts);
+            countsRef.current = counts;
+            startAutoSave(active._id || active.id);
           }
         }
       } catch (err) { console.error('Failed to restore active session'); }
@@ -146,6 +148,16 @@ function Dashboard({ user, token, onLogout }) {
         setHardwareAlert(data.alertMessage || "System Alert: Check Conveyor");
     }
 
+    // Handle two or more mangoes detected
+    if (data.twoMangoes && !previousTwoMangoesStateRef.current) {
+        setShowTwoMangoesPopup(true);
+        if (sessionActive) {
+            pauseBatch();
+            setHardwareAlert('Multiple mangoes detected - Batch paused');
+        }
+    }
+    previousTwoMangoesStateRef.current = data.twoMangoes || false;
+
     if (!sessionActive || sessionPaused) return;
 
     // Update Counts (Simplified for brevity)
@@ -212,8 +224,11 @@ function Dashboard({ user, token, onLogout }) {
       });
       if (res.ok) {
         const created = await res.json();
-        setCurrentSessionId(created._id);
-        startAutoSave(created._id);
+        const sessionId = created._id || created.id || (created.data && created.data._id) || null;
+        if (sessionId) {
+          setCurrentSessionId(sessionId);
+          startAutoSave(sessionId);
+        }
       }
       await startHardware();
       await controlConveyor('start');
@@ -229,6 +244,16 @@ function Dashboard({ user, token, onLogout }) {
             <div className="tutorial-box">
                 <h3 style={{ color: 'red' }}>⚠️ System Alert</h3>
                 <p>{hardwareAlert}</p>
+            </div>
+        </div>
+      )}
+
+      {showTwoMangoesPopup && (
+        <div className="tutorial-overlay" onClick={() => setShowTwoMangoesPopup(false)}>
+            <div className="tutorial-box">
+                <h3 style={{ color: 'orange' }}>⚠️ Multiple Mangoes Detected</h3>
+                <p>Two or more mangoes detected in the chamber.{sessionActive ? ' Batch has been paused.' : ''}</p>
+                <button onClick={() => setShowTwoMangoesPopup(false)} style={{ marginTop: '10px', padding: '8px 16px' }}>OK</button>
             </div>
         </div>
       )}

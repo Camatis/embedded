@@ -21,6 +21,30 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
+# Hardware state tracking
+sorting_active = False
+sorting_paused = False
+batch_state = 'idle'
+conveyor_state = 'stopped'
+count_small = 0
+count_medium = 0
+count_large = 0
+count_defective = 0
+count_total = 0
+last_mango = {
+    'size': None,
+    'health': None,
+    'timestamp': None,
+    'distance': None
+}
+gate_states = {
+    'small': 'closed',
+    'medium': 'closed',
+    'large': 'closed'
+}
+multi_detection_flag = False
+multi_detection_lock = threading.Lock()
+
 # ==========================================
 # GRACEFUL SHUTDOWN SETUP
 # ==========================================
@@ -204,7 +228,7 @@ def scan_for_mango_data():
     return False, False
 
 def autonomous_sorting_loop():
-    global sorting_active
+    global sorting_active, sorting_paused, batch_state, conveyor_state, count_small, count_medium, count_large, count_defective, count_total, last_mango, multi_detection_flag
     while True:
         if not sorting_active:
             set_led("OFF")
@@ -227,12 +251,132 @@ def autonomous_sorting_loop():
                 
             if is_defective:
                 trigger_buzzer()
-                # [.. execute_defective_delivery ..]
+                count_defective += 1
+                count_total += 1
+                last_mango = {
+                    'size': 'defective',
+                    'health': 'DEFECTIVE',
+                    'timestamp': datetime.now().isoformat(),
+                    'distance': None
+                }
                 continue
 
             # [.. Size sorting logic ..]
 
         time.sleep(0.01)
+
+@app.route('/api/hardware/status', methods=['GET'])
+def get_hardware_status():
+    return jsonify({
+        'counts': {
+            'small': count_small,
+            'medium': count_medium,
+            'large': count_large,
+            'defective': count_defective,
+            'total': count_total
+        },
+        'sensors': {
+            'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
+            'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
+            'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW
+        },
+        'state': 'running' if sorting_active else ('paused' if sorting_paused else 'idle'),
+        'batch_state': batch_state,
+        'conveyor_state': conveyor_state,
+        'last_mango': last_mango
+    })
+
+@app.route('/api/hardware/control', methods=['POST'])
+def hardware_control():
+    global sorting_active, sorting_paused, batch_state, conveyor_state, count_small, count_medium, count_large, count_defective, count_total, last_mango
+    data = request.get_json() or {}
+    action = data.get('action', '').lower()
+
+    if action == 'start':
+        sorting_active = True
+        sorting_paused = False
+        batch_state = 'running'
+        conveyor_state = 'running'
+        set_conveyor_speed(CONVEYOR_SPEED)
+        return jsonify({'success': True, 'message': 'Sorting started'})
+    elif action == 'pause':
+        sorting_active = False
+        sorting_paused = True
+        batch_state = 'paused'
+        conveyor_state = 'stopped'
+        set_conveyor_speed(0)
+        return jsonify({'success': True, 'message': 'Sorting paused'})
+    elif action in ('resume', 'continue'):
+        sorting_active = True
+        sorting_paused = False
+        batch_state = 'running'
+        conveyor_state = 'running'
+        set_conveyor_speed(CONVEYOR_SPEED)
+        return jsonify({'success': True, 'message': 'Sorting resumed'})
+    elif action == 'stop':
+        sorting_active = False
+        sorting_paused = False
+        batch_state = 'stopped'
+        conveyor_state = 'stopped'
+        set_conveyor_speed(0)
+        return jsonify({'success': True, 'message': 'Sorting stopped'})
+
+    return jsonify({'success': False, 'message': 'Invalid action'}), 400
+
+@app.route('/api/hardware/gate', methods=['POST'])
+def control_gate_manual():
+    data = request.get_json() or {}
+    gate_name = (data.get('gate') or '').lower()
+    action = (data.get('action') or '').lower()
+
+    if gate_name not in gate_states or action not in ('open', 'close'):
+        return jsonify({'success': False, 'message': 'Invalid gate or action'}), 400
+
+    gate_obj = {'small': small_gate, 'medium': medium_gate, 'large': large_gate}[gate_name]
+    if action == 'open':
+        gate_obj.angle = GATE_OPEN
+        gate_states[gate_name] = 'open'
+        return jsonify({'success': True, 'message': f'{gate_name} gate opened', 'gate_states': gate_states})
+    else:
+        gate_obj.angle = GATE_CLOSED
+        gate_states[gate_name] = 'closed'
+        return jsonify({'success': True, 'message': f'{gate_name} gate closed', 'gate_states': gate_states})
+
+@app.route('/api/hardware/gate', methods=['GET'])
+def get_gate_status():
+    return jsonify({'gate_states': gate_states})
+
+@app.route('/api/hardware/reset-counts', methods=['POST'])
+def reset_counts():
+    global count_small, count_medium, count_large, count_defective, count_total, last_mango
+    count_small = 0
+    count_medium = 0
+    count_large = 0
+    count_defective = 0
+    count_total = 0
+    last_mango = {'size': None, 'health': None, 'timestamp': None, 'distance': None}
+    return jsonify({'success': True, 'message': 'All counts reset', 'counts': {'small': count_small, 'medium': count_medium, 'large': count_large, 'defective': count_defective, 'total': count_total}})
+
+@app.route('/api/hardware/detection', methods=['GET'])
+def get_detection_status():
+    global multi_detection_flag
+    with multi_detection_lock:
+        flag = multi_detection_flag
+        multi_detection_flag = False
+    return jsonify({'multi_detection': flag})
+
+@app.route('/api/hardware/sensors', methods=['GET'])
+def get_sensor_diagnostics():
+    return jsonify({
+        'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
+        'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
+        'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW,
+        'defective': count_defective > 0,
+        'detectedSize': last_mango.get('size'),
+        'buzzerTriggered': False,
+        'alertMessage': '',
+        'twoMangoes': False
+    })
 
 # Service threads
 sorting_thread = threading.Thread(target=autonomous_sorting_loop)

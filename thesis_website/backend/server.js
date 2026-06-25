@@ -602,11 +602,49 @@ app.post('/api/sessions', verifyToken, async (req, res) => {
     console.warn('Cloud save failed, falling back to local queue:', err.message || err);
     try {
       const localSaved = await enqueueBatch(payload);
-      return res.status(201).json({ message: 'Saved locally (offline mode)', offline: true, data: localSaved });
+      return res.status(201).json(localSaved);
     } catch (localErr) {
       console.error('Local enqueue failed:', localErr);
       return res.status(500).json({ message: 'Failed to save session cloud and local', error: localErr.message });
     }
+  }
+});
+
+app.get('/api/sessions/active', verifyToken, async (req, res) => {
+  try {
+    const { userId, userRole } = await getRequestUserContext(req);
+    const activeQuery = userRole === 'admin'
+      ? { 'timestamps.end_time': { $exists: false } }
+      : { userId, 'timestamps.end_time': { $exists: false } };
+
+    let activeSession = await Session.findOne(activeQuery).sort({ 'timestamps.start_time': -1 });
+
+    if (!activeSession) {
+      activeSession = offlineQueue.find(session =>
+        !session.timestamps?.end_time && sessionAccessibleByUser(session, userId, userRole)
+      );
+    }
+
+    if (!activeSession && fs.existsSync(UNSYNCED_BATCH_DIR)) {
+      const files = fs.readdirSync(UNSYNCED_BATCH_DIR).filter(f => f.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const raw = fs.readFileSync(path.join(UNSYNCED_BATCH_DIR, file), 'utf8');
+          const batch = JSON.parse(raw);
+          if (!batch.timestamps?.end_time && sessionAccessibleByUser(batch, userId, userRole)) {
+            activeSession = batch;
+            break;
+          }
+        } catch (e) {
+          // ignore malformed offline session files
+        }
+      }
+    }
+
+    return res.json(activeSession || null);
+  } catch (err) {
+    console.error('Failed to get active session:', err.message || err);
+    res.status(500).json({ message: err.message });
   }
 });
 
@@ -970,13 +1008,25 @@ app.get('/api/hardware/sensors', async (req, res) => {
             console.log(`[Grace Period] Suppressing hardware counts for ${Math.round((countsGracePeriodMs - (Date.now() - countsResetTimestamp)) / 1000)}s more`);
         }
         
+        const trigger = data.sensors?.trigger ?? false;
+        const medium = data.sensors?.medium ?? false;
+        const large = data.sensors?.large ?? false;
+        const defective = data.last_mango?.health === 'DEFECTIVE';
+        const buzzerTriggered = data.buzzerTriggered ?? defective ?? false;
+        const alertMessage = data.alertMessage || '';
+        const twoMangoes = data.twoMangoes ?? false;
+
         res.json({
-            trigger: data.sensors?.trigger ?? false,
-            medium: data.sensors?.medium ?? false,
-            large: data.sensors?.large ?? false,
-            defective: data.last_mango?.health === 'DEFECTIVE',
+            small: trigger,
+            trigger,
+            medium,
+            large,
+            defective,
             detectedSize: data.last_mango?.size ?? null,
             lastMango: data.last_mango || null,
+            buzzerTriggered,
+            alertMessage,
+            twoMangoes,
             timestamp: Date.now(),
             online: true,
             state: data.state || 'unknown',
