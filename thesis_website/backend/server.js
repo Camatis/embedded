@@ -1033,20 +1033,25 @@ app.get('/api/hardware/sensors', async (req, res) => {
             counts: suppress ? {} : (data.counts || {})  // Suppress stale counts during grace period
         });
     } catch (error) {
-        console.error('Error getting sensor data:', error?.message || error);
-        res.status(500).json({
-            trigger: false,
-            medium: false,
-            large: false,
-            defective: false,
-            detectedSize: null,
-            lastMango: null,
-            timestamp: Date.now(),
-            online: false,
-            offline: true,
-            state: 'offline',
-            counts: {}
-        });
+      console.error('Error getting sensor data:', error?.message || error);
+      // Return a safe offline payload with HTTP 200 so frontend treats it as valid JSON
+      res.json({
+        small: false,
+        trigger: false,
+        medium: false,
+        large: false,
+        defective: false,
+        detectedSize: null,
+        lastMango: null,
+        buzzerTriggered: false,
+        alertMessage: '',
+        twoMangoes: false,
+        timestamp: Date.now(),
+        online: false,
+        offline: true,
+        state: 'offline',
+        counts: {}
+      });
     }
 });
 

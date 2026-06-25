@@ -28,6 +28,18 @@ latest_frame = None
 latest_frame_lock = threading.Lock()
 camera_lock = threading.Lock()
 
+# Start a dedicated asyncio event loop in a background thread for aiortc
+def _start_event_loop():
+    global loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_forever()
+    finally:
+        loop.close()
+
+_event_loop_thread = None
+
 # Threading & Detection state
 last_detections = []
 detection_cache_lock = threading.Lock()
@@ -145,6 +157,7 @@ class CameraTrack(VideoStreamTrack):
 @app.route('/offer', methods=['POST'])
 def offer():
     data = request.get_json()
+    print('📨 /offer received')
     pc = RTCPeerConnection()
     pcs.add(pc)
     pc.addTrack(CameraTrack())
@@ -155,10 +168,25 @@ def offer():
         await pc.setLocalDescription(answer)
         return pc.localDescription
 
-    # Run in the main event loop
-    loop = asyncio.get_event_loop()
+    # Ensure background asyncio loop is running
+    global loop, _event_loop_thread
+    if loop is None:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # Start our background loop if none exists
+            if _event_loop_thread is None or not _event_loop_thread.is_alive():
+                _event_loop_thread = threading.Thread(target=_start_event_loop, daemon=True)
+                _event_loop_thread.start()
+            # wait briefly for loop to start
+            wait_start = 0
+            while loop is None and wait_start < 5:
+                time.sleep(0.1)
+                wait_start += 0.1
+
     future = asyncio.run_coroutine_threadsafe(negotiate(), loop)
     local_desc = future.result()
+    print('✅ /offer answered')
     return jsonify({'sdp': local_desc.sdp, 'type': local_desc.type})
 
 @app.route('/detection', methods=['GET'])
