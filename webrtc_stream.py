@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""WebRTC camera stream with shared YOLO detector (background-threaded).
-
-Optimized with a Frame-Dropping Queue to achieve zero lag on Raspberry Pi.
-Decoupled and scaled for stable frontend React Dashboard rendering.
-"""
+"""WebRTC camera stream with YOLO detector and status classification."""
 
 import asyncio
 import cv2
@@ -20,395 +16,167 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from av import VideoFrame
 from picamera2 import Picamera2
 
-# Mute Flask server default terminal logging spam for clean hardware logs
-import logging
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
-
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"]}})
 pcs = set()
 
+# Global status vars
 loop = None
-loop_thread = None
-
-def setup_event_loop():
-    global loop, loop_thread
-    def run_loop():
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
-    
-    loop = asyncio.new_event_loop()
-    loop_thread = threading.Thread(target=run_loop, daemon=True)
-    loop_thread.start()
-    time.sleep(0.5)  
-    print("✓ Global asyncio event loop started")
-
 camera = None
-camera_lock = threading.Lock()
-
-CAMERA_WIDTH = 416
-CAMERA_HEIGHT = 312
-CAMERA_FPS = 12
-
-zmq_context = None
-detection_publisher = None
-DETECTION_PORT = 5555
-
-last_detections = []
-last_multi_detection = False
-detection_cache_lock = threading.Lock()
-
+yolo_model = None
 latest_frame = None
 latest_frame_lock = threading.Lock()
+camera_lock = threading.Lock()
 
-frame_is_new = False 
-DETECTION_INTERVAL = 0.03 
-yolo_model = None
+# Threading & Detection state
+last_detections = []
+detection_cache_lock = threading.Lock()
+frame_is_new = False
+DETECTION_INTERVAL = 0.03
+CAMERA_WIDTH, CAMERA_HEIGHT = 416, 312
+CAMERA_FPS = 12
+
+# ZMQ Setup
+zmq_context = zmq.Context()
+detection_publisher = zmq_context.socket(zmq.PUB)
+detection_publisher.bind("tcp://127.0.0.1:5555")
 
 def load_yolo_model():
-    """Load YOLO model globally at startup (only once)."""
     global yolo_model
-    print("Loading YOLO model...")
     try:
         from ultralytics import YOLO
         model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'final_weights.onnx'))
-        if not os.path.exists(model_path):
-            print(f"⚠ YOLO model not found at {model_path}")
-            yolo_model = None
-        else:
-            yolo_model = YOLO(model_path, task='detect')
-            print(f"✓ YOLO ONNX model successfully loaded from {model_path}")
+        yolo_model = YOLO(model_path, task='detect')
+        print(f"✓ YOLO model loaded from {model_path}")
     except Exception as e:
-        print(f"⚠ Failed to load YOLO model: {e}")
-        yolo_model = None
+        print(f"⚠ YOLO failed: {e}")
 
-def init_camera():
-    """Initialize Picamera2 with explicit RGB format for clean frame capture."""
-    global camera
-    if camera is not None:
-        return camera
-
-    try:
-        camera = Picamera2()
-        config = camera.create_video_configuration(
-            main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"}
-        )
-        camera.configure(config)
-        camera.start()
-        print(f"✓ Picamera2 initialized: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ {CAMERA_FPS}fps")
-        return camera
-    except Exception as e:
-        print(f"⚠ Camera initialization failed: {e}")
-        camera = None
-        return None
+def get_color_and_status(cls_name):
+    """Returns BGR color and boolean flags based on classification."""
+    cn = str(cls_name).strip().lower()
+    
+    is_defective = any(k in cn for k in ['defect', 'bad', 'damaged', 'rotten'])
+    is_carabao = 'carabao' in cn
+    
+    if is_defective:
+        return (0, 0, 255), True, False # Red
+    elif not is_carabao:
+        return (0, 255, 255), False, True # Yellow
+    else:
+        return (0, 255, 0), False, False # Green
 
 def run_detection(frame):
-    """Run YOLO detection on frame. Returns list of (x1,y1,x2,y2,conf,cls_name)."""
-    if yolo_model is None:
-        return []
-    try:
-        results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
-        
-        raw_detections = []
-        if results and len(results) > 0:
-            result = results[0]
-            boxes = result.boxes
-            
-            if boxes is not None and len(boxes) > 0:
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    conf = float(box.conf[0])
-                    cls_name = None
-                    try:
-                        if hasattr(box, 'cls') and box.cls is not None:
-                            cls_idx = int(box.cls[0])
-                            if hasattr(yolo_model, 'names'):
-                                cls_name = yolo_model.names.get(cls_idx, str(cls_idx))
-                    except Exception:
-                        pass
-                    raw_detections.append({"box": (x1, y1, x2, y2), "conf": conf, "class": cls_name})
-
-        final_detections = []
-        skip_indices = set()
-
-        # PRIORITY RESOLUTION: Handle overlapping boxes (e.g., Defective vs Not Carabao)
-        for i, det1 in enumerate(raw_detections):
-            if i in skip_indices:
-                continue
-            
-            for j, det2 in enumerate(raw_detections):
-                if i == j or j in skip_indices:
-                    continue
-                
-                b1, b2 = det1["box"], det2["box"]
-                center1 = ((b1[0] + b1[2]) / 2, (b1[1] + b1[3]) / 2)
-                center2 = ((b2[0] + b2[2]) / 2, (b2[1] + b2[3]) / 2)
-                
-                distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
-                
-                if distance < 35:
-                    c1_name = str(det1["class"]).strip().lower()
-                    c2_name = str(det2["class"]).strip().lower()
-
-                    is_c1_not_carabao = 'not carabao' in c1_name
-                    is_c2_not_carabao = 'not carabao' in c2_name
-                    
-                    is_c1_defective = 'not' not in c1_name and ('defect' in c1_name or 'bad' in c1_name or 'damaged' in c1_name or 'rotten' in c1_name)
-                    is_c2_defective = 'not' not in c2_name and ('defect' in c2_name or 'bad' in c2_name or 'damaged' in c2_name or 'rotten' in c2_name)
-
-                    # 1. "Not Carabao" overrides everything else.
-                    # 2. "Defective" overrides "Not Defective" (if both are Carabao).
-                    if is_c2_not_carabao:
-                        det1 = det2  
-                    elif is_c2_defective and not is_c1_not_carabao:
-                        det1 = det2  
-                        
-                    skip_indices.add(j)
-            
-            x1, y1, x2, y2 = det1["box"]
-            final_detections.append((x1, y1, x2, y2, det1["conf"], det1["class"]))
-        
-        return final_detections
-    except Exception as e:
-        print(f"⚠ YOLO inference error: {e}")
-        return []
-
-def background_capture():
-    global latest_frame, camera, frame_is_new
-    print("✓ Background capture thread started")
-    
-    while True:
-        try:
-            if camera is None:
-                time.sleep(0.1)
-                continue
-
-            if camera_lock.acquire(blocking=False):
-                try:
-                    frame = camera.capture_array()
-                finally:
-                    camera_lock.release()
-            else:
-                time.sleep(0.01)
-                continue
-            
-            if frame is None or frame.size == 0:
-                time.sleep(0.01)
-                continue
-            
-            clean_frame = np.ascontiguousarray(frame).copy()
-            
-            with latest_frame_lock:
-                latest_frame = clean_frame
-                frame_is_new = True 
-
-            time.sleep(1 / CAMERA_FPS) 
-        except Exception as e:
-            time.sleep(0.1)
+    """Run YOLO inference."""
+    if yolo_model is None: return []
+    results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
+    final_dets = []
+    if results and len(results) > 0:
+        for box in results[0].boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            conf = float(box.conf[0])
+            cls_idx = int(box.cls[0])
+            cls_name = yolo_model.names.get(cls_idx, "unknown")
+            final_dets.append((x1, y1, x2, y2, conf, cls_name))
+    return final_dets
 
 def background_detect():
-    global last_detections, last_multi_detection, frame_is_new
-    print("✓ Background detection thread started")
-
+    global last_detections
     while True:
-        try:
-            frame = None
-            
-            with latest_frame_lock:
-                if frame_is_new and latest_frame is not None:
-                    frame = latest_frame.copy()
-                    frame_is_new = False 
-
-            if frame is None:
-                time.sleep(0.01)
-                continue
-
+        frame = None
+        with latest_frame_lock:
+            if frame_is_new:
+                frame = latest_frame.copy()
+        
+        if frame is not None:
             detection_boxes = run_detection(frame)
             
-            if len(detection_boxes) == 0:
-                with detection_cache_lock:
-                    last_detections = []
-                    last_multi_detection = False
-                time.sleep(DETECTION_INTERVAL)
-                continue
-
-            is_defective = False
-            for x1, y1, x2, y2, conf, cls_name in detection_boxes:
-                if cls_name:
-                    cn = str(cls_name).strip().lower()
-                    # Only flag as defective if it is a Carabao mango
-                    if 'not carabao' not in cn and 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                        is_defective = True
+            # Prepare metadata for ZMQ and internal state
+            detections_data = []
+            is_defective_any = False
+            is_not_carabao_any = False
+            
+            for d in detection_boxes:
+                _, _, _, _, _, cls_name = d
+                _, is_def, is_not_car = get_color_and_status(cls_name)
+                if is_def: is_defective_any = True
+                if is_not_car: is_not_carabao_any = True
+                detections_data.append(d)
 
             with detection_cache_lock:
-                last_detections = detection_boxes
-                last_multi_detection = len(detection_boxes) > 1
-
-            if detection_publisher is not None:
-                now = time.time()
-                detection_msg = {
-                    'detections': [
-                        {
-                            'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2),
-                            'confidence': float(conf), 'class': str(cls_name) if cls_name else 'mango'
-                        }
-                        for x1, y1, x2, y2, conf, cls_name in detection_boxes
-                    ],
-                    'is_defective': is_defective,
-                    'multi_detection': len(detection_boxes) > 1,
-                    'timestamp': now
-                }
-                try:
-                    detection_publisher.send_json(detection_msg, flags=zmq.NOBLOCK)
-                except zmq.Again:
-                    pass
-
-            time.sleep(DETECTION_INTERVAL)
-        except Exception as e:
-            print(f"⚠ Detection thread error: {e}")
-            time.sleep(0.5)
-
-class CameraTrack(VideoStreamTrack):
-    def __init__(self, width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS):
-        super().__init__()
-        self.width = width
-        self.height = height
-        self.fps = fps
-
-    async def recv(self):
-        await asyncio.sleep(1 / self.fps)
-        pts, time_base = await self.next_timestamp()
-        
-        with latest_frame_lock:
-            frame = latest_frame.copy() if latest_frame is not None else None
-
-        if frame is None:
-            frame = np.zeros((self.height, self.width, 3), np.uint8)
-
-        with detection_cache_lock:
-            frame = draw_detection_boxes(frame, list(last_detections))
-
-        try:
-            frame = np.ascontiguousarray(frame)
-            video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
-            video_frame.pts = pts
-            video_frame.time_base = time_base
-            return video_frame
-        except Exception as e:
-            black = np.zeros((self.height, self.width, 3), np.uint8)
-            video_frame = VideoFrame.from_ndarray(black, format='rgb24')
-            video_frame.pts = pts
-            video_frame.time_base = time_base
-            return video_frame
+                last_detections = detections_data
+            
+            # Publish to servotest.py
+            msg = {
+                'detections': detections_data,
+                'is_defective': is_defective_any,
+                'is_not_carabao': is_not_carabao_any,
+                'timestamp': time.time()
+            }
+            try:
+                detection_publisher.send_json(msg, flags=zmq.NOBLOCK)
+            except: pass
+            
+        time.sleep(DETECTION_INTERVAL)
 
 def draw_detection_boxes(frame, boxes):
-    """Draws boxes utilizing OpenCV BGR Color Format."""
+    """Draws boxes based on classification colors."""
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        # Default bounding box is Green in BGR (Good Carabao)
-        color = (0, 255, 0)  
-        
-        if cls_name:
-            cn = str(cls_name).strip().lower()
-            if 'not carabao' in cn:
-                color = (0, 255, 255) # Yellow in BGR for "Not Carabao"
-            elif 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                color = (0, 0, 255)   # Red in BGR for "Defective"
-        
+        color, _, _ = get_color_and_status(cls_name)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        label = f"{cls_name or 'Mango'} {conf:.2f}"
-        cv2.putText(frame, label, (x1, max(20, y1 - 10)),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.putText(frame, f"{cls_name} {conf:.2f}", (x1, y1 - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return frame
 
+class CameraTrack(VideoStreamTrack):
+    async def recv(self):
+        pts, time_base = await self.next_timestamp()
+        with latest_frame_lock:
+            frame = latest_frame.copy() if latest_frame is not None else np.zeros((CAMERA_HEIGHT, CAMERA_WIDTH, 3), np.uint8)
+        
+        with detection_cache_lock:
+            frame = draw_detection_boxes(frame, list(last_detections))
+        
+        video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
+        video_frame.pts = pts
+        video_frame.time_base = time_base
+        return video_frame
+
+# --- Flask Routes ---
 @app.route('/offer', methods=['POST'])
 def offer():
-    global loop
-    if loop is None:
-        return jsonify({'success': False, 'error': 'Server not ready'}), 503
-    asyncio.set_event_loop(loop)
+    data = request.get_json()
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+    pc.addTrack(CameraTrack())
     
-    data = request.get_json() or {}
-    
-    sdp = data.get('sdp') or data.get('data', {}).get('sdp')
-    sdp_type = data.get('type') or data.get('data', {}).get('type') or 'offer'
+    async def negotiate():
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=data['sdp'], type=data['type']))
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        return pc.localDescription
 
-    if not sdp:
-        return jsonify({'success': False, 'error': 'Missing core SDP payload attributes'}), 400
-
-    try:
-        offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
-        pc = RTCPeerConnection()
-        pcs.add(pc)
-
-        @pc.on('iceconnectionstatechange')
-        def on_iceconnectionstatechange():
-            if pc.iceConnectionState in ['failed', 'closed', 'disconnected']:
-                asyncio.run_coroutine_threadsafe(pc.close(), loop)
-                pcs.discard(pc)
-
-        camera_track = CameraTrack(width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS)
-        pc.addTrack(camera_track)
-
-        async def run():
-            await pc.setRemoteDescription(offer_desc)
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            return pc.localDescription
-
-        future = asyncio.run_coroutine_threadsafe(run(), loop)
-        local_desc = future.result(timeout=15)
-        return jsonify({'success': True, 'sdp': local_desc.sdp, 'type': local_desc.type})
-    except Exception as e:
-        print(f"⚠ WebRTC Negotiation Error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/status')
-def status():
-    return jsonify({'stream_running': True, 'resolution': f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}", 'fps': CAMERA_FPS})
+    # Run in the main event loop
+    loop = asyncio.get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(negotiate(), loop)
+    local_desc = future.result()
+    return jsonify({'sdp': local_desc.sdp, 'type': local_desc.type})
 
 @app.route('/detection', methods=['GET'])
 def detection():
-    global last_detections, last_multi_detection
     with detection_cache_lock:
-        return jsonify({
-            'multi_detection': last_multi_detection,
-            'detection_count': len(last_detections),
-            'detections': [
-                {'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2), 'confidence': float(conf), 'class': str(cls_name)}
-                for x1, y1, x2, y2, conf, cls_name in last_detections
-            ]
-        })
+        return jsonify({'detections': last_detections})
 
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({'message': 'RPi WebRTC camera stream running', 'endpoint': '/offer'})
-
+# --- Main Initialization ---
 if __name__ == '__main__':
-    try:
-        zmq_context = zmq.Context()
-        detection_publisher = zmq_context.socket(zmq.PUB)
-        detection_publisher.setsockopt(zmq.SNDHWM, 1)  
-        detection_publisher.bind(f"tcp://127.0.0.1:{DETECTION_PORT}")
-        print(f"✓ ZMQ detection publisher started on tcp://127.0.0.1:{DETECTION_PORT}")
-        time.sleep(0.5)  
-    except Exception as e:
-        print(f"⚠ Failed to initialize ZMQ: {e}")
-        detection_publisher = None
-
-    print("Starting Mango Sorter WebRTC stream on port 8082...")
-    load_yolo_model()  
-
-    try:
-        init_camera()
-    except Exception as e:
-        print(f"⚠ Camera init failed: {e}")
-
-    cap_thread = threading.Thread(target=background_capture, daemon=True)
-    cap_thread.start()
-
-    det_thread = threading.Thread(target=background_detect, daemon=True)
-    det_thread.start()
-
-    setup_event_loop()
+    # Initialize hardware
+    camera = Picamera2()
+    camera.configure(camera.create_video_configuration(main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"}))
+    camera.start()
+    
+    load_yolo_model()
+    
+    # Start threads
+    threading.Thread(target=lambda: (lambda c: [ (c.capture_array(), setattr(globals(), 'latest_frame', c.capture_array()), setattr(globals(), 'frame_is_new', True)) for _ in iter(int, 1) ])(camera), daemon=True).start()
+    threading.Thread(target=background_detect, daemon=True).start()
+    
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
