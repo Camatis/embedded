@@ -44,6 +44,7 @@ function Dashboard({ user, token, onLogout }) {
 
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
   const autoSaveIntervalRef = useRef(null);
+  const previousDefectiveStateRef = useRef(false);
 
   // Persistence: Restore session on load
   useEffect(() => {
@@ -148,13 +149,15 @@ function Dashboard({ user, token, onLogout }) {
     if (!sessionActive || sessionPaused) return;
 
     // Update Counts (Simplified for brevity)
-    if (data.defective) {
+    // Only increment on state transition from false to true (new defective detection)
+    if (data.defective && !previousDefectiveStateRef.current) {
         setSortingStats(prev => {
             const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
             countsRef.current = updated;
             return updated;
         });
     }
+    previousDefectiveStateRef.current = data.defective;
     // ... logic for small/medium/large ...
   };
 
