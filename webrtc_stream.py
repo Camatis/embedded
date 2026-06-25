@@ -175,8 +175,26 @@ if __name__ == '__main__':
     
     load_yolo_model()
     
+    # Capture loop: continuously grab frames and publish into shared state
+    def capture_loop(cam):
+        global latest_frame, frame_is_new
+        try:
+            while True:
+                frame = cam.capture_array()
+                with latest_frame_lock:
+                    # store a copy to avoid downstream mutation
+                    try:
+                        latest_frame = frame.copy()
+                    except Exception:
+                        latest_frame = frame
+                    frame_is_new = True
+                # pace capture to configured FPS
+                time.sleep(1.0 / max(1, CAMERA_FPS))
+        except Exception as e:
+            print('⚠️ Capture loop error:', e)
+
     # Start threads
-    threading.Thread(target=lambda: (lambda c: [ (c.capture_array(), setattr(globals(), 'latest_frame', c.capture_array()), setattr(globals(), 'frame_is_new', True)) for _ in iter(int, 1) ])(camera), daemon=True).start()
+    threading.Thread(target=lambda: capture_loop(camera), daemon=True).start()
     threading.Thread(target=background_detect, daemon=True).start()
     
     app.run(host='0.0.0.0', port=8082, debug=False, threaded=True)
