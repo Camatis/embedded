@@ -5,12 +5,19 @@ import './Dashboard.css';
 function Dashboard({ user, token, onLogout }) {
   // Main view state
   const [currentView, setCurrentView] = useState('dashboard');
+  
+  // Camera string, connection, and error states to prevent compiler crashes
+  const [cameraStatus, setCameraStatus] = useState('Disconnected');
+  const [cameraError, setCameraError] = useState('');
+  const [webrtcReady, setWebrtcReady] = useState(false);
+
   // Sensor detection states
   const [sensorStates, setSensorStates] = useState({
     small: { status: 'Inactive', detecting: false },
     medium: { status: 'Inactive', detecting: false },
     large: { status: 'Inactive', detecting: false }
   });
+
   // Last detected mango size
   const [detectedSize, setDetectedSize] = useState('NONE');
   const [sortingStats, setSortingStats] = useState({
@@ -20,22 +27,24 @@ function Dashboard({ user, token, onLogout }) {
     total: 0,
     defective: 0
   });
+
   // Defective flag
   const [isDefective, setIsDefective] = useState(false);
   const [sortingHistory, setSortingHistory] = useState([]);
+
   // Session and batch management
   const [sessionActive, setSessionActive] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [editingName, setEditingName] = useState('');
+  
   const videoRef = useRef(null);
-  const [cameraError, setCameraError] = useState(null);
-  const [cameraStatus, setCameraStatus] = useState('Disconnected');
   const [cameraReloadKey, setCameraReloadKey] = useState(0);
   const pcRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+
   const defaultSettings = {
     limitSmall: 100,
     limitMedium: 100,
@@ -44,6 +53,7 @@ function Dashboard({ user, token, onLogout }) {
     enablePiStream: false,
     piStreamUrl: ''
   };
+
   const [settings, setSettings] = useState(defaultSettings);
   const [sessionPaused, setSessionPaused] = useState(false);
   const [hardwareStatus, setHardwareStatus] = useState('Normal');
@@ -61,33 +71,19 @@ function Dashboard({ user, token, onLogout }) {
     medium: 'closed',
     large: 'closed'
   });
+
+  // Fixed targeting port allocation mapping (targeting backend-express proxy route)
   const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}:5001`;
+
   const tutorialSteps = [
-    {
-      title: 'Start a New Batch',
-      body: 'Ready to begin? Click the Start New Batch button located under the System Controls panel to kick off the sorting process.'
-    },
-    {
-      title: 'Stop the Batch',
-      body: 'Whenever you need to finish or halt the current run, simply click the Stop button, also found in the System Controls.'
-    },
-    {
-      title: 'Current Batch Statistics',
-      body: 'Keep an eye on your numbers here! This section shows your live data, including total mangoes processed, size breakdowns, and the count of defective mangoes.'
-    },
-    {
-      title: 'Open the Menu Bar',
-      body: 'To access more system options, click the three horizontal lines (the hamburger icon) in the upper left corner. To close the menu, simply click anywhere outside of it.'
-    },
-    {
-      title: 'Batch History & Renaming',
-      body: 'Inside the menu bar, open the Batch History tab to review past runs. Here, you can view the total counts for previous batches and rename them for better organization.'
-    },
-    {
-      title: 'Hardware Status',
-      body: 'Ensure your hardware is running smoothly. Click the Hardware Status tab in the menu bar to verify that every single sensor is online and working correctly.'
-    }
+    { title: 'Start a New Batch', body: 'Ready to begin? Click the Start New Batch button located under the System Controls panel to kick off the sorting process.' },
+    { title: 'Stop the Batch', body: 'Whenever you need to finish or halt the current run, simply click the Stop button, also found in the System Controls.' },
+    { title: 'Current Batch Statistics', body: 'Keep an eye on your numbers here! This section shows your live data, including total mangoes processed, size breakdowns, and the count of defective mangoes.' },
+    { title: 'Open the Menu Bar', body: 'To access more system options, click the three horizontal lines (the hamburger icon) in the upper left corner.' },
+    { title: 'Batch History & Renaming', body: 'Inside the menu bar, open the Batch History tab to review past runs and rename them for better organization.' },
+    { title: 'Hardware Status', body: 'Ensure your hardware is running smoothly. Click the Hardware Status tab in the menu bar to verify that every single sensor is online.' }
   ];
+
   const openTutorial = () => setShowTutorial(true);
   const overlayRef = useRef(null);
   const menuToggleRef = useRef(null);
@@ -95,38 +91,63 @@ function Dashboard({ user, token, onLogout }) {
   const [pwNew, setPwNew] = useState('');
   const [pwConfirm, setPwConfirm] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
+
   // Track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
-  const lastDetectedRef = useRef({ size: null, timestamp: null });
-  const resetInProgressRef = useRef(false);
+  const autoSaveIntervalRef = useRef(null);
 
-  const controlGate = async (gate, action) => {
-    try {
-      const apiUrl = `${BACKEND_URL}/api/hardware/gate`;
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gate, action })
-      });
-      const result = await res.json();
-      if (!res.ok) {
-        console.error('Gate control failed', result);
+  // Auto-save counts to database every 30 seconds during active batch
+  const startAutoSave = (sessionId) => {
+    if (autoSaveIntervalRef.current) clearInterval(autoSaveIntervalRef.current);
+    
+    autoSaveIntervalRef.current = setInterval(async () => {
+      if (!sessionId || !sessionActive) return;
+      
+      try {
+        const currentCounts = countsRef.current;
+        console.log('💾 Auto-saving batch counts:', currentCounts);
+        
+        const res = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            counts: {
+              small: currentCounts.small,
+              medium: currentCounts.medium,
+              large: currentCounts.large,
+              defective: currentCounts.defective
+            },
+            quality_stats: {
+              non_defective: currentCounts.small + currentCounts.medium + currentCounts.large,
+              defective: currentCounts.defective,
+              total: currentCounts.total
+            }
+          })
+        });
+        
+        if (!res.ok) console.warn('Auto-save failed with status:', res.status);
+      } catch (err) {
+        console.error('Auto-save error:', err);
       }
-      return result;
-    } catch (err) {
-      console.error('Gate control error', err);
-      return { success: false, message: err.message };
+    }, 30000);
+  };
+
+  const stopAutoSave = () => {
+    if (autoSaveIntervalRef.current) {
+      clearInterval(autoSaveIntervalRef.current);
+      autoSaveIntervalRef.current = null;
     }
   };
 
   const controlConveyor = async (action) => {
     try {
       let endpoint = '/api/hardware/conveyor';
-      if (action === 'pause') {
-        endpoint = '/api/hardware/pause';
-      } else if (action === 'continue') {
-        endpoint = '/api/hardware/continue';
-      }
+      if (action === 'pause') endpoint = '/api/hardware/pause';
+      else if (action === 'continue') endpoint = '/api/hardware/continue';
+
       const apiUrl = `${BACKEND_URL}${endpoint}`;
       const payload = action === 'pause' || action === 'continue' ? {} : { action };
       const res = await fetch(apiUrl, {
@@ -134,13 +155,9 @@ function Dashboard({ user, token, onLogout }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const result = await res.json();
-      if (!res.ok) {
-        console.error('Conveyor control failed', result);
-      }
-      return result;
+      return await res.json();
     } catch (err) {
-      console.error('Conveyor control error', err);
+      console.error('Conveyor control error:', err);
       return { success: false, message: err.message };
     }
   };
@@ -149,14 +166,7 @@ function Dashboard({ user, token, onLogout }) {
     try {
       const apiUrl = `${BACKEND_URL}/api/hardware/start`;
       const res = await fetch(apiUrl, { method: 'POST' });
-      const result = await res.json();
-      if (res.ok) {
-        console.log('Hardware process started:', result);
-        return result;
-      } else {
-        console.error('Failed to start hardware:', result);
-        return result;
-      }
+      return await res.json();
     } catch (err) {
       console.error('Hardware start error:', err);
       return { success: false, message: err.message };
@@ -167,133 +177,85 @@ function Dashboard({ user, token, onLogout }) {
     try {
       const apiUrl = `${BACKEND_URL}/api/hardware/stop`;
       const res = await fetch(apiUrl, { method: 'POST' });
-      const result = await res.json();
-      if (res.ok) {
-        console.log('Hardware process stopped:', result);
-        return result;
-      } else {
-        console.error('Failed to stop hardware:', result);
-        return result;
-      }
+      return await res.json();
     } catch (err) {
       console.error('Hardware stop error:', err);
       return { success: false, message: err.message };
     }
   };
 
-  const getHardwareStatus = async () => {
-    try {
-      const apiUrl = `${BACKEND_URL}/api/hardware/status`;
-      const res = await fetch(apiUrl);
-      const result = await res.json();
-      return result;
-    } catch (err) {
-      console.error('Hardware status error:', err);
-      return { running: false, process_active: false };
-    }
-  };
-
+  // OPTIMIZED: Implemented frontend ICE state auto-reconnect fallback loop to prevent feed freezes
   const initWebRTCStream = async () => {
-    setCameraError(null);
-    setCameraStatus('Connecting...');
+    if (!videoRef.current) return;
 
-    if (!videoRef.current) {
-      setCameraError('Camera element not mounted yet');
-      setCameraStatus('Error');
-      return;
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
     }
 
     try {
-      if (pcRef.current) {
-        pcRef.current.close();
-      }
-
+      setCameraStatus('Initializing WebRTC connection...');
+      setCameraError('');
+      
       const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
-        ]
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
       pcRef.current = pc;
 
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-        setCameraStatus(pc.iceConnectionState);
-      };
-
       pc.ontrack = (event) => {
-        console.log('Video track received');
         if (videoRef.current) {
           videoRef.current.srcObject = event.streams[0];
         }
       };
 
-      pc.onerror = (error) => {
-        console.error('WebRTC connection error:', error);
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        console.log("WebRTC Connection State Change:", state);
+        
+        if (state === 'connected' || state === 'completed') {
+          setCameraStatus('WebRTC stream connected');
+          setWebrtcReady(true);
+        } else if (state === 'failed' || state === 'disconnected') {
+          setCameraStatus(`Connection ${state}. Reconnecting...`);
+          setWebrtcReady(false);
+          
+          // Trigger hot reload loop recovery
+          setTimeout(() => {
+            setCameraReloadKey(prev => prev + 1);
+          }, 2000);
+        }
       };
 
-      pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
-      };
-
+      // Handle stream track negotiations
       pc.addTransceiver('video', { direction: 'recvonly' });
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // FIXED: Forward directly through the Node gateway proxy instead of hardcoding an unstable IP address
-      const webrtcUrl = `${BACKEND_URL}/api/webrtc-offer`;
-      console.log('Connecting to WebRTC stream via gateway at:', webrtcUrl);
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); 
-
-      const response = await fetch(webrtcUrl, {
+      const response = await fetch(`${BACKEND_URL}/api/webrtc-offer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'offer', // FIXED: Resolved missing comma token compilation failure
-          sdp: offer.sdp
-        }),
-        signal: controller.signal
+        body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
       });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const body = await response.text();
-        console.error('Server error response:', body);
-        throw new Error(`WebRTC server error: ${response.status}`);
-      }
-
       const answer = await response.json();
-      
-      if (!answer.success && answer.error) {
-        throw new Error(`WebRTC error: ${answer.error}`);
-      }
-
-      if (!answer.sdp || !answer.type) {
-        console.error('Invalid answer format:', answer);
-        throw new Error('Invalid WebRTC answer from server');
-      }
+      if (!response.ok) throw new Error(answer.message || 'WebRTC offer failed');
 
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      setCameraStatus('Connected');
-      console.log('✓ WebRTC connection established');
+      setCameraStatus('WebRTC stream is live');
+      setWebrtcReady(true);
     } catch (err) {
-      console.error('WebRTC init failed:', err);
-      setCameraError(err.message || 'Failed to connect camera stream');
-      setCameraStatus('Error');
-      if (pcRef.current) {
-        pcRef.current.close();
-        pcRef.current = null;
-      }
+      console.error('WebRTC init error:', err);
+      setCameraError(err.message || 'Unable to start WebRTC stream');
+      setCameraStatus('WebRTC stream failed');
+      setWebrtcReady(false);
     }
   };
 
   useEffect(() => {
-    if (currentView !== 'dashboard') return;
-    initWebRTCStream();
-
+    if (currentView === 'dashboard') {
+      initWebRTCStream();
+    }
     return () => {
       if (pcRef.current) {
         pcRef.current.close();
@@ -307,6 +269,7 @@ function Dashboard({ user, token, onLogout }) {
     setHardwareAlert('Stopped due to limit or temperature condition.');
     await endBatch();
   };
+
   const checkLimits = (stats) => {
     if (settings.limitSmall && stats.small >= settings.limitSmall) {
       setLimitAlert('Amount limit reached: small mangoes');
@@ -361,10 +324,6 @@ function Dashboard({ user, token, onLogout }) {
     }
 
     const existingPassword = persisted[username];
-    if (!existingPassword) {
-      setPasswordMessage('No local password record found for this user.');
-      return;
-    }
     if (existingPassword !== pwCurrent) {
       setPasswordMessage('Current password is incorrect.');
       return;
@@ -372,7 +331,6 @@ function Dashboard({ user, token, onLogout }) {
 
     persisted[username] = pwNew;
     localStorage.setItem('userPasswords', JSON.stringify(persisted));
-
     setPasswordMessage('Password changed successfully.');
     setPwCurrent('');
     setPwNew('');
@@ -381,131 +339,97 @@ function Dashboard({ user, token, onLogout }) {
 
   const handleSensorData = (data) => {
     try {
-      if (data.detectedSize || data.defective) {
-        console.log('📡 [SENSOR DATA] Received:', { 
-          sessionActive, 
-          sessionPaused, 
-          detectedSize: data.detectedSize, 
-          defective: data.defective,
-          timestamp: new Date().toISOString()
-        });
-      }
-
       setSensorStates(prev => ({
         small: { ...prev.small, detecting: data.small },
         medium: { ...prev.medium, detecting: data.medium },
         large: { ...prev.large, detecting: data.large }
       }));
 
-      const parseCount = (value) => {
-        if (typeof value === 'number') return value;
-        if (typeof value === 'string' && value.trim() !== '') {
-          const parsed = Number(value);
-          return Number.isFinite(parsed) ? parsed : 0;
-        }
-        return 0;
-      };
-
-      const countsSource = data.counts && (data.counts.small !== undefined || data.counts.medium !== undefined || data.counts.large !== undefined || data.counts.defective !== undefined)
-        ? {
-            small: parseCount(data.counts.small),
-            medium: parseCount(data.counts.medium),
-            large: parseCount(data.counts.large),
-            defective: parseCount(data.counts.defective),
-            total: typeof data.counts.total === 'number'
-              ? data.counts.total
-              : parseCount(data.counts.small) + parseCount(data.counts.medium) + parseCount(data.counts.large) + parseCount(data.counts.defective)
-          }
-        : null;
-
-      if (countsSource) {
-        if (resetInProgressRef.current) {
-          console.log('⏭️  [SYNC] Skipping count sync during reset grace period');
-          return;
-        }
-
-        const needsSync = countsSource.small !== countsRef.current.small
-          || countsSource.medium !== countsRef.current.medium
-          || countsSource.large !== countsRef.current.large
-          || countsSource.defective !== countsRef.current.defective
-          || countsSource.total !== countsRef.current.total;
-
-        if (needsSync) {
-          console.log('🔄 [SYNC] Hardware count snapshot received, syncing counts:', countsSource);
-          countsRef.current = countsSource;
-          setSortingStats(prev => ({ ...prev, ...countsSource }));
-        }
-      }
-
-      if (!currentSessionId) {
-        if (!countsSource) {
-          if (data.defective || data.detectedSize) {
-            console.log('⚠️  [SENSOR] Current session missing but sensor event received:', data.detectedSize || 'DEFECTIVE');
-          }
-        }
-
+      if (!sessionActive || sessionPaused) {
         if (data.defective) {
           setDetectedSize('DEFECTIVE');
           setIsDefective(true);
           setIsDefectiveFlag(true);
-        } else if (data.detectedSize) {
-          const sizeLabel = String(data.detectedSize).toUpperCase();
-          setDetectedSize(sizeLabel);
+        } else {
           setIsDefective(false);
           setIsDefectiveFlag(false);
         }
         return;
       }
 
-      const mangoKey = data.lastMango?.timestamp
-        ? `${data.lastMango.timestamp}-${String(data.detectedSize || '').toUpperCase()}`
-        : null;
-
-      const updateDetectedSize = (newSize) => {
-        setDetectedSize(newSize);
-        setIsDefective(newSize === 'DEFECTIVE');
-        setIsDefectiveFlag(newSize === 'DEFECTIVE');
-      };
-
       if (data.defective) {
-        if (mangoKey && mangoKey !== lastDetectedRef.current.key) {
-          lastDetectedRef.current.key = mangoKey;
-          updateDetectedSize('DEFECTIVE');
-          console.log('🚨 [COUNT] Defective detected from hardware snapshot');
+        setIsDefective(true);
+        setIsDefectiveFlag(true);
+        setDetectedSize('DEFECTIVE');
+        setSortingStats(prev => {
+          const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
+          countsRef.current = updated;  
+          checkLimits(updated);
+          return updated;
+        });
+      } else {
+        setIsDefective(false);
+        setIsDefectiveFlag(false);
+
+        let sizeIndex = null;
+        if (typeof data.detectedSize === 'string') {
+          const mapped = data.detectedSize.trim().toUpperCase();
+          if (mapped === 'SMALL') sizeIndex = 1;
+          else if (mapped === 'MEDIUM') sizeIndex = 2;
+          else if (mapped === 'LARGE') sizeIndex = 3;
+        } else if (typeof data.detectedSize === 'number') {
+          sizeIndex = data.detectedSize;
+        }
+
+        switch (sizeIndex) {
+          case 1:
+            setDetectedSize('SMALL');
+            setSortingStats(prev => {
+              const updated = { ...prev, small: prev.small + 1, total: prev.total + 1 };
+              countsRef.current = updated;
+              checkLimits(updated);
+              return updated;
+            });
+            break;
+          case 2:
+            setDetectedSize('MEDIUM');
+            setSortingStats(prev => {
+              const updated = { ...prev, medium: prev.medium + 1, total: prev.total + 1 };
+              countsRef.current = updated;
+              checkLimits(updated);
+              return updated;
+            });
+            break;
+          case 3:
+            setDetectedSize('LARGE');
+            setSortingStats(prev => {
+              const updated = { ...prev, large: prev.large + 1, total: prev.total + 1 };
+              countsRef.current = updated;
+              checkLimits(updated);
+              return updated;
+            });
+            break;
+          default:
+            setDetectedSize('NONE');
+        }
+
+        if (sizeIndex >= 1 && sizeIndex <= 3) {
+          const timestamp = new Date().toLocaleTimeString();
           setSortingHistory(prev => {
-            const newHistory = [...prev, { timestamp: new Date().toLocaleTimeString(), size: 'DEFECTIVE' }];
+            const newHistory = [...prev, {
+              timestamp,
+              size: sizeIndex === 1 ? 'SMALL' : sizeIndex === 2 ? 'MEDIUM' : 'LARGE'
+            }];
             return newHistory.slice(-100);
           });
         }
-        return;
-      }
-
-      let sizeIndex = null;
-      if (typeof data.detectedSize === 'string') {
-        const mapped = data.detectedSize.trim().toUpperCase();
-        if (mapped === 'SMALL') sizeIndex = 1;
-        else if (mapped === 'MEDIUM') sizeIndex = 2;
-        else if (mapped === 'LARGE') sizeIndex = 3;
-        console.log('📏 [SIZE PARSE] Received:', data.detectedSize, '-> sizeIndex:', sizeIndex);
-      } else if (typeof data.detectedSize === 'number') {
-        sizeIndex = data.detectedSize;
-        console.log('📏 [SIZE PARSE] Received number:', data.detectedSize, '-> sizeIndex:', sizeIndex);
-      }
-
-      if (sizeIndex >= 1 && sizeIndex <= 3 && mangoKey && mangoKey !== lastDetectedRef.current.key) {
-        lastDetectedRef.current.key = mangoKey;
-        const sizeLabel = sizeIndex === 1 ? 'SMALL' : sizeIndex === 2 ? 'MEDIUM' : 'LARGE';
-        updateDetectedSize(sizeLabel);
-        setSortingHistory(prev => {
-          const newHistory = [...prev, { timestamp: new Date().toLocaleTimeString(), size: sizeLabel }];
-          return newHistory.slice(-100);
-        });
       }
     } catch (error) {
       console.error('Error processing sensor data:', error);
     }
   };
 
+  // Poll sensor telemetry entries from hardware express routing layer
   useEffect(() => {
     setSensorStates(prev => ({
       small: { ...prev.small, status: 'Active' },
@@ -528,20 +452,8 @@ function Dashboard({ user, token, onLogout }) {
           medium: !!data.medium,
           large: !!data.large,
           defective: !!data.defective,
-          detectedSize: data.detectedSize,
-          counts: data.counts || {},
-          lastMango: data.lastMango || {}
+          detectedSize: data.detectedSize
         };
-        
-        if (data.defective || data.detectedSize) {
-          console.log('📡 Received from backend sensor endpoint:', {
-            detectedSize: data.detectedSize,
-            counts: normalized.counts,
-            lastMango: normalized.lastMango,
-            sessionActive,
-            sessionPaused
-          });
-        }
 
         if (mounted) handleSensorData(normalized);
       } catch (err) {
@@ -558,6 +470,7 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, [sessionActive, sessionPaused]);
 
+  // CPU temperature monitor (RPi thermal zone pooling)
   useEffect(() => {
     const fetchTemp = async () => {
       try {
@@ -568,12 +481,12 @@ function Dashboard({ user, token, onLogout }) {
           setCpuTemp(data.cpuTemp);
           if (data.cpuTemp >= 85) {
             setHardwareStatus('Over Limit (Shutdown)');
-            setHardwareAlert('Temperature has exceeded operational limits. Machine turning off. Saving the current batch to history.');
+            setHardwareAlert('Temperature exceeded limits. Machine turning off. Saving current batch to history.');
             setShowTempPopup(true);
             stopSessionImmediately();
           } else if (data.cpuTemp >= 80) {
             setHardwareStatus('Throttling');
-            setHardwareAlert('Temperature is nearly exceeding limits. Stop operations immediately to prevent machine damage.');
+            setHardwareAlert('Temperature is nearly exceeding limits. Stop operations immediately to prevent damage.');
             setShowTempPopup(true);
           } else if (data.cpuTemp >= 70) {
             setHardwareStatus('High Load');
@@ -588,12 +501,6 @@ function Dashboard({ user, token, onLogout }) {
             setHardwareAlert('Ambient temperature.');
             setShowTempPopup(false);
           }
-        } else {
-          setCpuTemp(prevTemp => {
-            let nextTemp = prevTemp + (Math.random() * 4 - 1.5);
-            nextTemp = Math.max(35, Math.min(92, nextTemp));
-            return nextTemp;
-          });
         }
       } catch (err) {
         console.error('Could not read CPU temperature', err);
@@ -603,22 +510,17 @@ function Dashboard({ user, token, onLogout }) {
     fetchTemp();
     const intervalId = setInterval(fetchTemp, 3000);
     return () => clearInterval(intervalId);
-  }, [stopSessionImmediately]);
+  }, [sessionActive, sessionPaused]);
 
   const fetchSessions = async () => {
     try {
       const apiUrl = `${BACKEND_URL}/api/sessions`;
       const res = await fetch(apiUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
         const data = await res.json();
-        console.log('📋 Fetched sessions:', data);
         setSessions(data);
-      } else {
-        console.error('Failed to fetch sessions');
       }
     } catch (err) {
       console.error('Error fetching sessions', err);
@@ -627,17 +529,13 @@ function Dashboard({ user, token, onLogout }) {
 
   useEffect(() => {
     fetchSessions();
-  }, []);
-
-  useEffect(() => {
     if (user) {
       const seen = localStorage.getItem('tutorialSeen');
-      if (!seen) {
-        setShowTutorial(true);
-      }
+      if (!seen) setShowTutorial(true);
     }
   }, [user]);
 
+  // Poll physical gate servo feedbacks
   useEffect(() => {
     let mounted = true;
     const pollGateStatus = async () => {
@@ -646,9 +544,7 @@ function Dashboard({ user, token, onLogout }) {
         const res = await fetch(apiUrl);
         if (res.ok) {
           const data = await res.json();
-          if (mounted && data.gate_states) {
-            setGateStates(data.gate_states);
-          }
+          if (mounted && data.gate_states) setGateStates(data.gate_states);
         }
       } catch (err) {
         console.error('Error fetching gate status', err);
@@ -663,6 +559,7 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
+  // Poll detection status for multi-mango alerts WITH MECHATRONIC OVERRIDE
   useEffect(() => {
     let mounted = true;
     const pollDetectionStatus = async () => {
@@ -672,8 +569,15 @@ function Dashboard({ user, token, onLogout }) {
         if (res.ok) {
           const data = await res.json();
           if (mounted && data.multi_detection === true) {
+            // 1. Show the pop-up warning
             setShowTwoMangoesPopup(true);
-            console.log('🥭🥭 Multiple mangoes detected!');
+            console.log('Multiple mangoes detected!');
+            
+            // 2. Automatically trigger the mechanical pause ONLY if the batch is currently running
+            if (sessionActive && !sessionPaused) {
+              console.log('Safety Protocol: Pausing batch due to multiple mangoes.');
+              pauseBatch();
+            }
           }
         }
       } catch (err) {
@@ -686,58 +590,7 @@ function Dashboard({ user, token, onLogout }) {
       mounted = false;
       clearInterval(intervalId);
     };
-  }, []);
-
-  useEffect(() => {
-    if (!sessionActive || !currentSessionId) return;
-
-    const autosaveInterval = setInterval(async () => {
-      try {
-        const countsToSave = {
-          small: countsRef.current.small,
-          medium: countsRef.current.medium,
-          large: countsRef.current.large,
-          defective: countsRef.current.defective
-        };
-        console.log('💾 [AUTOSAVE] Saving counts to DB:', countsToSave, 'for session:', currentSessionId);
-        
-        const response = await fetch(`${BACKEND_URL}/api/sessions/${currentSessionId}`, {
-          method: 'PUT',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ counts: countsToSave })
-        });
-        
-        if (response.ok) {
-          console.log('✅ [AUTOSAVE] Counts saved successfully');
-        } else {
-          console.warn('⚠️  [AUTOSAVE] Failed - status:', response.status);
-        }
-      } catch (err) {
-        console.warn('⚠️  [AUTOSAVE] Error:', err.message);
-      }
-    }, 3000);
-
-    return () => clearInterval(autosaveInterval);
-  }, [sessionActive, currentSessionId, token]);
-
-  useEffect(() => {
-    if (!currentSessionId) return;
-    setSessions(prev => prev.map(session => {
-      if (session._id !== currentSessionId) return session;
-      return {
-        ...session,
-        counts: {
-          small: sortingStats.small,
-          medium: sortingStats.medium,
-          large: sortingStats.large,
-          defective: sortingStats.defective
-        }
-      };
-    }));
-  }, [sortingStats, currentSessionId]);
+  }, [sessionActive, sessionPaused]);
 
   const clearSessions = async () => {
     try {
@@ -754,15 +607,9 @@ function Dashboard({ user, token, onLogout }) {
         setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
         setCurrentSessionId(null);
         await fetchSessions();
-      } else {
-        console.error('Failed to clear sessions');
-        setSessions([]);
-        setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
       }
     } catch (err) {
       console.error('Error clearing sessions', err);
-      setSessions([]);
-      setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
     }
   };
 
@@ -804,7 +651,6 @@ function Dashboard({ user, token, onLogout }) {
         const logoDataUrl = await loadImageDataUrl('/login.png');
         doc.addImage(logoDataUrl, 'PNG', 250, 8, 34, 34);
       } catch (imgErr) {
-        console.warn('Logo image load failed; fallback to icon.', imgErr);
         doc.setFillColor(255, 215, 0);
         doc.circle(268, 19, 8, 'F');
       }
@@ -812,7 +658,7 @@ function Dashboard({ user, token, onLogout }) {
       doc.setTextColor('#011627');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGPAIN)', margin, 15);
+      doc.text('AUTOMATED MANGO SORTING SYSTEM (MANGOPAIN)', margin, 15);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'normal');
       doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
@@ -820,21 +666,14 @@ function Dashboard({ user, token, onLogout }) {
       y = 44;
       const username = user?.username || 'vince@email.com';
       const today = new Date();
-      doc.setTextColor('#011627');
-      doc.setFontSize(10);
-      doc.text(`Operator: ${username}`, margin, y);
-      y += 6;
-      doc.text(`Date of Export: ${today.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}`, margin, y);
-      y += 6;
+      doc.text(`Operator: ${username}`, margin, y); y += 6;
+      doc.text(`Date of Export: ${today.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}`, margin, y); y += 6;
       doc.text('System Version: AI Vision Model v1.0 (YOLO)', margin, y);
 
       y += 12;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(11);
-      doc.text('1. EXECUTIVE SUMMARY', margin, y);
-      y += 6;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+      doc.text('1. EXECUTIVE SUMMARY', margin, y); y += 6;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
 
       const totalBatches = sessions.length;
       const totalSmall = sessions.reduce((acc, s) => acc + (s.counts?.small || 0), 0);
@@ -842,8 +681,7 @@ function Dashboard({ user, token, onLogout }) {
       const totalLarge = sessions.reduce((acc, s) => acc + (s.counts?.large || 0), 0);
       const totalDefective = sessions.reduce((acc, s) => acc + (s.counts?.defective || 0), 0);
       const totalProcessed = sessions.reduce((acc, s) => acc + ((s.counts?.small||0) + (s.counts?.medium||0) + (s.counts?.large||0) + (s.counts?.defective||0)), 0);
-      const totalPass = totalProcessed - totalDefective;
-      const passRate = totalProcessed ? ((totalPass / totalProcessed) * 100).toFixed(1) : '0.0';
+      const passRate = totalProcessed ? (((totalProcessed - totalDefective) / totalProcessed) * 100).toFixed(1) : '0.0';
       const rejectRate = totalProcessed ? ((totalDefective / totalProcessed) * 100).toFixed(1) : '0.0';
 
       doc.text(`Total Batches Analyzed: ${totalBatches}`, margin, y); y += 6;
@@ -851,11 +689,9 @@ function Dashboard({ user, token, onLogout }) {
       doc.text(`Overall System Yield: ${passRate}% Pass / ${rejectRate}% Reject`, margin, y);
 
       y += 12;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(11);
-      doc.text('2. BATCH BREAKDOWN', margin, y);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+      doc.text('2. BATCH BREAKDOWN', margin, y); y += 8;
 
-      y += 8;
       const headers = ['Batch Name', 'Start Time', 'End Time', 'Small', 'Medium', 'Large', 'Defective', 'Total', 'Pass Rate'];
       const colW = [38, 28, 28, 18, 18, 18, 20, 18, 24];
       const tableWidth = colW.reduce((a, b) => a + b, 0);
@@ -863,24 +699,19 @@ function Dashboard({ user, token, onLogout }) {
 
       doc.setFillColor(230, 230, 230);
       doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
-
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor('#1a1a1a');
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor('#1a1a1a');
+      
       headers.forEach((heading, i) => {
         doc.text(heading, x, y);
         x += colW[i];
       });
 
       y += 7;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
 
       sessions.forEach((s, idx) => {
         if (y > 270) {
-          doc.addPage();
-          y = 18;
-          x = margin;
+          doc.addPage(); y = 18; x = margin;
           doc.setFillColor(230, 230, 230);
           doc.rect(margin - 2, y - 5, tableWidth + 4, 8, 'F');
           doc.setFont('helvetica', 'bold');
@@ -888,9 +719,7 @@ function Dashboard({ user, token, onLogout }) {
             doc.text(heading, x, y);
             x += colW[i];
           });
-          y += 7;
-          doc.setFont('helvetica', 'normal');
-          x = margin;
+          y += 7; doc.setFont('helvetica', 'normal');
         }
 
         if (idx % 2 === 0) {
@@ -913,17 +742,12 @@ function Dashboard({ user, token, onLogout }) {
           doc.text(String(cell), x, y);
           x += colW[i];
         });
-
         y += 7;
       });
 
-      const fileName = `batch_history_export_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`;
-      doc.save(fileName);
-      return;
+      doc.save(`batch_history_export_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`);
     } catch (err) {
       console.error('PDF export failed:', err);
-      alert('PDF export failed.');
-      return;
     }
   };
 
@@ -952,8 +776,6 @@ function Dashboard({ user, token, onLogout }) {
         const updated = await res.json();
         setSessions(prev => prev.map(s => (s._id === id ? updated : s)));
         cancelEditing();
-      } else {
-        console.error('Failed to update session name');
       }
     } catch (err) {
       console.error('Error updating session name', err);
@@ -962,185 +784,134 @@ function Dashboard({ user, token, onLogout }) {
 
   const startNewSession = async () => {
     try {
-      resetInProgressRef.current = true;
-      console.log('🔄 [RESET] Starting new batch - hardware resetting counts...');
-      setTimeout(() => {
-        resetInProgressRef.current = false;
-        console.log('✓ [RESET] Grace period ended - accepting fresh counts');
-      }, 1000);
-
+      setHardwareAlert('Starting new batch...');
       const initialCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
       setSortingStats(initialCounts);
       countsRef.current = initialCounts;
-      setSortingHistory([]);
-      setDetectedSize('NONE');
-      setIsDefective(false);
-      setIsDefectiveFlag(false);
-      setSessionActive(false);
-      setSessionPaused(false);
-      setHardwareAlert('Starting new batch (offline-safe)...');
 
-      const clearUrl = `${BACKEND_URL}/api/clear-sensor-data`;
-      await fetch(clearUrl, { method: 'POST' }).catch(err => console.error('Failed to clear sensor data:', err));
+      await fetch(`${BACKEND_URL}/api/clear-sensor-data`, { method: 'POST' });
 
-      const payload = {
-        session_name: `Batch ${sessions.length + 1}`,
-        counts: initialCounts,
-        timestamps: { start_time: new Date() }
-      };
-      const apiUrl = `${BACKEND_URL}/api/sessions`;
-
-      const res = await fetch(apiUrl, {
+      const res = await fetch(`${BACKEND_URL}/api/sessions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        const created = await res.json();
-        const newId = created._id || created.data?._id || (created.offline && created.data?._id) || null;
-        setCurrentSessionId(newId);
-        setHardwareAlert('Batch record created');
-      } else {
-        const errorText = await res.text();
-        console.error('Failed to start session', errorText);
-        setHardwareAlert(`Started offline, sync pending${errorText ? ': ' + errorText : ''}`);
-      }
-
-      const startResult = await startHardware();
-      const conveyorResult = await controlConveyor('start');
-      const active = startResult.success && conveyorResult.success;
-
-      if (!startResult.success) {
-        console.error('Hardware start failed:', startResult);
-        setHardwareAlert(`Hardware start failed: ${startResult.message}`);
-      }
-      if (!conveyorResult.success) {
-        console.error('Conveyor start failed');
-      }
-
-      if (active) {
-        setSessionActive(true);
-        setSessionPaused(false);
-        setHardwareAlert('New batch started');
-      } else {
-        setSessionActive(false);
-        setSessionPaused(false);
-        setHardwareAlert('Batch created; hardware not yet ready. Start the conveyor once ready.');
-      }
-
-      await fetchSessions();
-    } catch (err) {
-      console.error('Error starting session', err);
-      setHardwareAlert(`Error starting batch: ${err.message}`);
-      setSessionActive(false);
-      setSessionPaused(false);
-    }
-  };
-
-  const continueBatch = async () => {
-    if (!currentSessionId) {
-      setHardwareAlert('No stopped batch exists. Start new batch.');
-      return;
-    }
-    setSessionActive(true);
-    setSessionPaused(false);
-    setHardwareAlert('Continuing existing batch');
-
-    try {
-      await fetch(`${BACKEND_URL}/api/hardware/control`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'continue' })
-      });
-    } catch (err) {
-      console.error('Error continuing sorting process:', err);
-    }
-
-    await controlConveyor('continue');
-  };
-
-  const endBatch = async () => {
-    try {
-      if (!currentSessionId) {
-        setHardwareAlert('No batch to stop');
-        return;
-      }
-
-      setHardwareAlert('Stopping batch...');
-      const currentCounts = {
-        small: countsRef.current.small,
-        medium: countsRef.current.medium,
-        large: countsRef.current.large,
-        defective: countsRef.current.defective,
-        total: countsRef.current.total
-      };
-
-      const stopResult = await stopHardware();
-      const conveyorResult = await controlConveyor('stop');
-
-      if (!stopResult.success) {
-        console.error('Hardware stop failed:', stopResult);
-        setHardwareAlert(`Hardware stop failed: ${stopResult.message}`);
-      }
-      if (!conveyorResult.success) {
-        console.error('Conveyor stop failed:', conveyorResult);
-      }
-
-      setSessionActive(false);
-      setSessionPaused(false);
-      setCurrentSessionId(null);
-
-      const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
-      const res = await fetch(apiUrl, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify({
-          counts: {
-            small: currentCounts.small,
-            medium: currentCounts.medium,
-            large: currentCounts.large,
-            defective: currentCounts.defective
-          },
-          quality_stats: {
-            non_defective: currentCounts.small + currentCounts.medium + currentCounts.large,
-            defective: currentCounts.defective,
-            total: currentCounts.total
-          },
-          timestamps: { end_time: new Date() }
+          session_name: `Batch ${sessions.length + 1}`,
+          counts: initialCounts,
+          timestamps: { start_time: new Date() }
         })
       });
 
       if (res.ok) {
-        setHardwareAlert('Batch stopped and finalized');
-      } else {
-        console.error('Failed to save final batch counts');
-        setHardwareAlert('Batch stopped, but failed to save final batch counts');
+        const created = await res.json();
+        const newId = created._id || created.data?._id || null;
+        setCurrentSessionId(newId);
+        startAutoSave(newId);
       }
 
+      await startHardware();
+      await controlConveyor('start');
+
+      setSessionActive(true);
+      setSessionPaused(false);
+      setHardwareAlert('New batch started');
+      fetchSessions();
+    } catch (err) {
+      console.error('Error starting session', err);
+      stopAutoSave();
+    }
+  };
+
+  const continueBatch = async () => {
+    if (!currentSessionId) return;
+    setSessionActive(true);
+    setSessionPaused(false);
+    setHardwareAlert('Continuing batch');
+
+    await fetch(`${BACKEND_URL}/api/hardware/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'continue' })
+    });
+    await controlConveyor('continue');
+  };
+
+  const endBatch = async () => {
+    const saveBatchWithRetry = async (sessionId, data, maxRetries = 3) => {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}`, {
+            method: 'PUT',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(data)
+          });
+          if (res.ok) return { success: true };
+          if (attempt < maxRetries) await new Promise(r => setTimeout(r, 1000));
+        } catch (err) {
+          if (attempt === maxRetries) return { success: false, message: err.message };
+        }
+      }
+      return { success: false, message: 'Max retries exceeded' };
+    };
+
+    try {
+      if (!currentSessionId) return;
+      setHardwareAlert('Stopping batch and saving data...');
+
+      await fetch(`${BACKEND_URL}/api/hardware/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stop' })
+      });
+      await controlConveyor('stop');
+
+      const batchData = {
+        counts: {
+          small: countsRef.current.small,
+          medium: countsRef.current.medium,
+          large: countsRef.current.large,
+          defective: countsRef.current.defective
+        },
+        quality_stats: {
+          non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
+          defective: countsRef.current.defective,
+          total: countsRef.current.total
+        },
+        timestamps: { end_time: new Date() }
+      };
+
+      const saveResult = await saveBatchWithRetry(currentSessionId, batchData);
+      if (saveResult.success) {
+        await stopHardware();
+        setHardwareAlert('✅ Batch stopped and saved');
+      }
+
+      stopAutoSave();
+      setSessionActive(false);
+      setSessionPaused(false);
+      setCurrentSessionId(null);
       setTimeout(() => { fetchSessions(); }, 500);
     } catch (err) {
       console.error('Error ending batch', err);
-      setHardwareAlert('Error stopping batch');
     }
   };
 
   const pauseBatch = async () => {
     try {
-      if (!currentSessionId) {
-        setHardwareAlert('No active batch to pause');
-        setSessionActive(false);
-        setSessionPaused(false);
-        return;
-      }
-      const apiUrl = `${BACKEND_URL}/api/sessions/${currentSessionId}`;
-      const res = await fetch(apiUrl, {
+      if (!currentSessionId) return;
+      await fetch(`${BACKEND_URL}/api/hardware/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'pause' })
+      });
+      await controlConveyor('pause');
+
+      await fetch(`${BACKEND_URL}/api/sessions/${currentSessionId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1152,37 +923,29 @@ function Dashboard({ user, token, onLogout }) {
             medium: countsRef.current.medium,
             large: countsRef.current.large,
             defective: countsRef.current.defective
-          },
-          quality_stats: {
-            non_defective: countsRef.current.small + countsRef.current.medium + countsRef.current.large,
-            defective: countsRef.current.defective,
-            total: countsRef.current.total
           }
         })
       });
-      if (res.ok) {
-        try {
-          await fetch(`${BACKEND_URL}/api/hardware/control`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'pause' })
-          });
-        } catch (err) {
-          console.error('Error pausing sorting process:', err);
-        }
 
-        await controlConveyor('pause');
-        setSessionActive(false);
-        setSessionPaused(true);
-        setHardwareAlert('Batch paused - you may continue or stop batch');
-        setTimeout(() => { fetchSessions(); }, 500);
-      } else {
-        console.error('Failed to pause session');
-      }
+      setSessionActive(false);
+      setSessionPaused(true);
+      setHardwareAlert('Batch paused');
+      setTimeout(() => { fetchSessions(); }, 500);
     } catch (err) {
       console.error('Error pausing session', err);
     }
   };
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (!menuOpen) return;
+      if (overlayRef.current && overlayRef.current.contains(e.target)) return;
+      if (menuToggleRef.current && menuToggleRef.current.contains(e.target)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
 
   return (
     <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
@@ -1238,7 +1001,7 @@ function Dashboard({ user, token, onLogout }) {
             {user && user.username ? user.username : 'User'}
           </div>
           <nav className="menu-items" aria-label="Main navigation">
-            <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setCameraError(null); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
+            <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
             <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
             <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
             <button type="button" onClick={() => { setCurrentView('hardware-controls'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-controls' ? 'active' : ''}`}>Hardware Controls</button>
@@ -1257,396 +1020,186 @@ function Dashboard({ user, token, onLogout }) {
             <span />
             <span />
           </div>
-          <h1>MangPain</h1>
+          <h1>MangoPain</h1>
         </div>
       </header>
 
       <div className="parent">
         {currentView === 'dashboard' ? (
-          <>
-        <div className="dashboard-container">
-          <div className="dashboard-left">
-            <div className="welcome-card camera-feed-section">
-              <div className="camera-controls">
-                <h2>Live Camera Feed</h2>
-              </div>
-              <div className="camera-container">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  style={{ width: '100%', minHeight: '240px', objectFit: 'cover', borderRadius: '12px', backgroundColor: '#000' }}
-                />
-              </div>
-              {cameraError && (
-                <div style={{ marginTop: '8px', color: '#c62828', fontSize: '13px', fontWeight: 600 }}>
-                  {cameraError}
+          <div className="dashboard-container">
+            <div className="dashboard-left">
+              <div className="welcome-card camera-feed-section">
+                <div className="camera-controls">
+                  <h2>Live Camera Feed</h2>
                 </div>
-              )}
-              <p style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
-                Camera status: {cameraStatus}
-              </p>
+                <div className="camera-container">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{ 
+                      width: '100%', 
+                      maxWidth: '480px', 
+                      aspectRatio: '4 / 3', 
+                      objectFit: 'cover', 
+                      borderRadius: '12px', 
+                      backgroundColor: '#000' 
+                    }}
+                  />
+                </div>
+                <div style={{ marginTop: '6px', color: '#444', fontSize: '12px' }}>
+                  <div>Mode: WebRTC (480x360 @ 15fps)</div>
+                  <div>Status: {cameraStatus}</div>
+                  {cameraError && <div style={{ color: 'red' }}>{cameraError}</div>}
+                </div>
+              </div>
+
+              <div className="system-controls">
+                <h3>System Controls</h3>
+                {isDefectiveFlag && <div style={{ color: 'red', fontWeight: 700, marginBottom: '8px' }}>DEFECTIVE</div>}
+                <div className="system-control-actions">
+                  <button className="control-button start-button" onClick={startNewSession} disabled={sessionActive || sessionPaused} style={{ fontSize: '15px', padding: '14px 16px' }}>Start New Batch</button>
+                  {sessionActive && <button className="control-button stop-button" onClick={pauseBatch} style={{ fontSize: '15px', padding: '14px 16px' }}>Pause Batch</button>}
+                  {sessionPaused && <button className="control-button start-button" onClick={continueBatch} style={{ fontSize: '15px', padding: '14px 16px' }}>Continue Batch</button>}
+                  {(sessionActive || sessionPaused) && <button className="control-button stop-button" onClick={endBatch} style={{ fontSize: '15px', padding: '14px 16px' }}>Stop Batch</button>}
+                </div>
+              </div>
             </div>
 
-            <div className="system-controls">
-              <h3>System Controls</h3>
-              {isDefectiveFlag && <div style={{ color: 'red', fontWeight: 700, marginBottom: '8px' }}>DEFECTIVE</div>}
-              <div className="system-control-actions">
-                <button
-                  className="control-button start-button"
-                  onClick={startNewSession}
-                  disabled={sessionActive || sessionPaused}
-                  style={{ fontSize: '15px', padding: '14px 16px' }}
-                >
-                  Start New Batch
-                </button>
-
-                {sessionActive && (
-                  <button
-                    className="control-button stop-button"
-                    onClick={pauseBatch}
-                    style={{ fontSize: '15px', padding: '14px 16px' }}
-                  >
-                    Pause Batch
-                  </button>
-                )}
-
-                {sessionPaused && (
-                  <button
-                    className="control-button start-button"
-                    onClick={continueBatch}
-                    style={{ fontSize: '15px', padding: '14px 16px' }}
-                  >
-                    Continue Batch
-                  </button>
-                )}
-
-                {(sessionActive || sessionPaused) && (
-                  <button
-                    className="control-button stop-button"
-                    onClick={endBatch}
-                    style={{ fontSize: '15px', padding: '14px 16px' }}
-                  >
-                    Stop Batch
-                  </button>
-                )}
+            <div className="dashboard-right">
+              <h2 className="stats-title">Current Batch Statistics</h2>
+              <div className="stats-grid">
+                <div className="stats-card"><h3>SMALL SIZE</h3><p className="stats-count">{sortingStats.small}</p></div>
+                <div className="stats-card"><h3>MEDIUM SIZE</h3><p className="stats-count">{sortingStats.medium}</p></div>
+                <div className="stats-card"><h3>LARGE SIZE</h3><p className="stats-count">{sortingStats.large}</p></div>
+                <div className="stats-card defective-card"><h3>DEFECTIVE</h3><p className="stats-count">{sortingStats.defective}</p></div>
+                <div className="stats-card total-card"><h3>TOTAL PROCESSED</h3><p className="stats-count">{sortingStats.total}</p></div>
               </div>
             </div>
           </div>
-
-          <div className="dashboard-right">
-            <h2 className="stats-title">Current Batch Statistics</h2>
-            
-            <div className="stats-grid">
-              <div className="stats-card">
-                <h3>SMALL SIZE</h3>
-                <p className="stats-count">{sortingStats.small}</p>
-              </div>
-
-              <div className="stats-card">
-                <h3>MEDIUM SIZE</h3>
-                <p className="stats-count">{sortingStats.medium}</p>
-              </div>
-
-              <div className="stats-card">
-                <h3>LARGE SIZE</h3>
-                <p className="stats-count">{sortingStats.large}</p>
-              </div>
-
-              <div className="stats-card defective-card">
-                <h3>DEFECTIVE</h3>
-                <p className="stats-count">{sortingStats.defective}</p>
-              </div>
-
-              <div className="stats-card total-card">
-                <h3>TOTAL PROCESSED</h3>
-                <p className="stats-count">{sortingStats.total}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-          </>
         ) : currentView === 'hardware-status' ? (
-          <>
-        <div className="sensor-status-container">
-          <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Status</h2>
-          
-          <div className="sensor-grid">
-            <div className="welcome-card sensor-card small">
-              <h3>Small Mango Sensor</h3>
-              <p>
-                <span className={`serial-monitor ${sensorStates.small.detecting ? 'detecting' : 'not-detecting'}`}>
-                  {sensorStates.small.detecting ? 'Detecting' : 'Not Detecting'}
-                </span>
-              </p>
-            </div>
-
-            <div className="welcome-card sensor-card medium">
-              <h3>Medium Mango Sensor</h3>
-              <p>
-                <span className={`serial-monitor ${sensorStates.medium.detecting ? 'detecting' : 'not-detecting'}`}>
-                  {sensorStates.medium.detecting ? 'Detecting' : 'Not Detecting'}
-                </span>
-              </p>
-            </div>
-
-            <div className="welcome-card sensor-card large">
-              <h3>Large Mango Sensor</h3>
-              <p>
-                <span className={`serial-monitor ${sensorStates.large.detecting ? 'detecting' : 'not-detecting'}`}>
-                  {sensorStates.large.detecting ? 'Detecting' : 'Not Detecting'}
-                </span>
-              </p>
-            </div>
-          </div>
-          <div className="hardware-status-panel" style={{ marginTop: '20px' }}>
-            <h3>CPU Temperature Monitor</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ width: '70%', background: '#eee', borderRadius: '8px', height: '22px', overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min(100, Math.round((cpuTemp / 90) * 100))}%`, height: '100%', background: cpuTemp >= 85 ? '#ff5252' : cpuTemp >= 80 ? '#ffeb3b' : cpuTemp >= 70 ? '#ff9800' : cpuTemp >= 50 ? '#4caf50' : '#2196f3', transition: 'width 0.3s ease' }} />
+          <div className="sensor-status-container">
+            <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Status</h2>
+            <div className="sensor-grid">
+              <div className="welcome-card sensor-card small">
+                <h3>Small Mango Sensor</h3>
+                <p><span className={`serial-monitor ${sensorStates.small.detecting ? 'detecting' : 'not-detecting'}`}>{sensorStates.small.detecting ? 'Detecting' : 'Not Detecting'}</span></p>
               </div>
-              <strong>{cpuTemp.toFixed(1)}°C</strong>
-            </div>
-            <p style={{ marginTop: '8px', color: cpuTemp >= 85 ? '#b71c1c' : cpuTemp >= 80 ? '#ff6f00' : cpuTemp >= 70 ? '#f57c00' : '#333' }}>{hardwareStatus}: {hardwareAlert}</p>
-          </div>
-        </div>
-          </>
-        ) : currentView === 'hardware-controls' ? (
-          <>
-        <div className="hardware-controls-container">
-          <h2 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '600', color: '#333' }}>Hardware Controls</h2>
-          <p style={{ color: '#666', marginBottom: '20px' }}>Manually operate sorting gates for testing and calibration.</p>
-          
-          <div className="control-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-            <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.small === 'open' ? '#4caf50' : '#f44336'}` }}>
-              <h3 style={{ marginTop: 0 }}>Small Mango Gate</h3>
-              <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.small === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.small === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  className="control-button start-button"
-                  onClick={() => {
-                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ gate: 'SMALL', action: 'open' })
-                    }).catch(err => console.error('Error:', err));
-                  }}
-                  style={{ flex: 1, padding: '10px' }}
-                  disabled={gateStates.small === 'open'}
-                >
-                  Open
-                </button>
-                <button
-                  className="control-button stop-button"
-                  onClick={() => {
-                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ gate: 'SMALL', action: 'close' })
-                    }).catch(err => console.error('Error:', err));
-                  }}
-                  style={{ flex: 1, padding: '10px' }}
-                  disabled={gateStates.small === 'closed'}
-                >
-                  Close
-                </button>
+              <div className="welcome-card sensor-card medium">
+                <h3>Medium Mango Sensor</h3>
+                <p><span className={`serial-monitor ${sensorStates.medium.detecting ? 'detecting' : 'not-detecting'}`}>{sensorStates.medium.detecting ? 'Detecting' : 'Not Detecting'}</span></p>
+              </div>
+              <div className="welcome-card sensor-card large">
+                <h3>Large Mango Sensor</h3>
+                <p><span className={`serial-monitor ${sensorStates.large.detecting ? 'detecting' : 'not-detecting'}`}>{sensorStates.large.detecting ? 'Detecting' : 'Not Detecting'}</span></p>
               </div>
             </div>
-
-            <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.medium === 'open' ? '#4caf50' : '#f44336'}` }}>
-              <h3 style={{ marginTop: 0 }}>Medium Mango Gate</h3>
-              <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.medium === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.medium === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  className="control-button start-button"
-                  onClick={() => {
-                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ gate: 'MEDIUM', action: 'open' })
-                    }).catch(err => console.error('Error:', err));
-                  }}
-                  style={{ flex: 1, padding: '10px' }}
-                  disabled={gateStates.medium === 'open'}
-                >
-                  Open
-                </button>
-                <button
-                  className="control-button stop-button"
-                  onClick={() => {
-                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ gate: 'MEDIUM', action: 'close' })
-                    }).catch(err => console.error('Error:', err));
-                  }}
-                  style={{ flex: 1, padding: '10px' }}
-                  disabled={gateStates.medium === 'closed'}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-
-            <div className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates.large === 'open' ? '#4caf50' : '#f44336'}` }}>
-              <h3 style={{ marginTop: 0 }}>Large Mango Gate</h3>
-              <p style={{ margin: '8px 0', fontSize: '14px', color: '#666' }}>Status: <span style={{ fontWeight: 'bold', color: gateStates.large === 'open' ? '#4caf50' : '#f44336' }}>{gateStates.large === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  className="control-button start-button"
-                  onClick={() => {
-                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ gate: 'LARGE', action: 'open' })
-                    }).catch(err => console.error('Error:', err));
-                  }}
-                  style={{ flex: 1, padding: '10px' }}
-                  disabled={gateStates.large === 'open'}
-                >
-                  Open
-                </button>
-                <button
-                  className="control-button stop-button"
-                  onClick={() => {
-                    fetch(`${BACKEND_URL}/api/hardware/gate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ gate: 'LARGE', action: 'close' })
-                    }).catch(err => console.error('Error:', err));
-                  }}
-                  style={{ flex: 1, padding: '10px' }}
-                  disabled={gateStates.large === 'closed'}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-          </>
-        ) : currentView === 'change-password' ? (
-          <>
-            <div className="change-password-panel">
-              <h2>Change Password</h2>
-              <form onSubmit={handleChangePassword} style={{ display: 'grid', gap: '14px' }}>
-                <label>
-                  Current Password
-                  <input type="password" value={pwCurrent} onChange={e => setPwCurrent(e.target.value)} required />
-                </label>
-                <label>
-                  New Password
-                  <input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} required />
-                </label>
-                <label>
-                  Confirm New Password
-                  <input type="password" value={pwConfirm} onChange={e => setPwConfirm(e.target.value)} required />
-                </label>
-                <button type="submit" className="control-button start-button" style={{ width: '220px' }}>Save Password</button>
-                {passwordMessage && <p style={{ color: passwordMessage.includes('successfully') ? '#2e7d32' : '#d32f2f', fontWeight: 600 }}>{passwordMessage}</p>}
-                <p className="hint">New password must be at least 6 characters.</p>
-              </form>
-            </div>
-          </>
-        ) : currentView === 'settings' ? (
-          <>
-            <div className="settings-panel">
-              <h2>Settings</h2>
-
-              <div className="settings-section">
-                <h3>Mango Detection</h3>
-                <div className="settings-grid">
-                  <label>
-                    Small mango limit:
-                    <input type="number" min="0" value={settings.limitSmall} onChange={e => setSettings(s => ({ ...s, limitSmall: Number(e.target.value) }))} />
-                  </label>
-                  <label>
-                    Medium mango limit:
-                    <input type="number" min="0" value={settings.limitMedium} onChange={e => setSettings(s => ({ ...s, limitMedium: Number(e.target.value) }))} />
-                  </label>
-                  <label>
-                    Large mango limit:
-                    <input type="number" min="0" value={settings.limitLarge} onChange={e => setSettings(s => ({ ...s, limitLarge: Number(e.target.value) }))} />
-                  </label>
-                  <label>
-                    Defective mango limit:
-                    <input type="number" min="0" value={settings.limitDefective} onChange={e => setSettings(s => ({ ...s, limitDefective: Number(e.target.value) }))} />
-                  </label>
+            <div className="hardware-status-panel" style={{ marginTop: '20px' }}>
+              <h3>CPU Temperature Monitor</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '70%', background: '#eee', borderRadius: '8px', height: '22px', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min(100, Math.round((cpuTemp / 90) * 100))}%`, height: '100%', background: cpuTemp >= 85 ? '#ff5252' : cpuTemp >= 80 ? '#ffeb3b' : cpuTemp >= 70 ? '#ff9800' : cpuTemp >= 50 ? '#4caf50' : '#2196f3', transition: 'width 0.3s ease' }} />
                 </div>
+                <strong>{cpuTemp.toFixed(1)}°C</strong>
               </div>
-
-              <div className="settings-actions">
-                <button type="button" className="control-button start-button" onClick={() => setPasswordMessage('Settings saved')}>
-                  Save Settings
-                </button>
-                <button type="button" className="control-button stop-button" onClick={() => {
-                  setSettings(defaultSettings);
-                  setPasswordMessage('Settings reset to defaults');
-                }}>
-                  Reset to Defaults
-                </button>
-              </div>
-              <p className="hint">These limits automatically stop the batch when reached.</p>
-            </div>
-          </>
-        ) : (
-          <>
-        <div className="batch-history-container">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h2 style={{ margin: 0 }}>Sorting History (Sessions)</h2>
-            <div>
-              <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
-              <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+              <p style={{ marginTop: '8px', color: cpuTemp >= 85 ? '#b71c1c' : cpuTemp >= 80 ? '#ff6f00' : cpuTemp >= 70 ? '#f57c00' : '#333' }}>{hardwareStatus}: {hardwareAlert}</p>
             </div>
           </div>
-          <div className="history-table-container">
-            <table className="history-table">
-            <thead>
-              <tr>
-                <th>Batch</th>
-                <th>Small</th>
-                <th>Medium</th>
-                <th>Large</th>
-                <th>Defective</th>
-                <th>Total</th>
-                <th>Start Time</th>
-                <th>End Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions && sessions.map((s, idx) => (
-                <tr key={s._id || idx}>
-                  {editingSessionId === s._id ? (
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <input value={editingName} onChange={e => setEditingName(e.target.value)} style={{ width: 200, padding: '6px 8px' }} />
-                        <button onClick={() => saveEditing(s._id)} style={{ padding: '6px 10px' }}>Save</button>
-                        <button onClick={cancelEditing} style={{ padding: '6px 10px' }}>Cancel</button>
-                      </div>
-                    </td>
-                  ) : (
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span>{s.session_name || `Batch ${idx + 1}`}</span>
-                        <button onClick={() => startEditing(s._id, s.session_name)} style={{ fontSize: 12, padding: '4px 8px' }}>Rename</button>
-                      </div>
-                    </td>
-                  )}
-                  <td>{s.counts?.small ?? 0}</td>
-                  <td>{s.counts?.medium ?? 0}</td>
-                  <td>{s.counts?.large ?? 0}</td>
-                  <td>{s.counts?.defective ?? 0}</td>
-                  <td>{(s.counts?.small||0) + (s.counts?.medium||0) + (s.counts?.large||0) + (s.counts?.defective||0)}</td>
-                  <td>{s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-'}</td>
-                  <td>{s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-'}</td>
-                </tr>
+        ) : currentView === 'hardware-controls' ? (
+          <div className="hardware-controls-container">
+            <h2>Hardware Controls</h2>
+            <p style={{ color: '#666', marginBottom: '20px' }}>Manually operate sorting gates for testing and calibration.</p>
+            <div className="control-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+              {['SMALL', 'MEDIUM', 'LARGE'].map((size) => (
+                <div key={size} className="welcome-card" style={{ padding: '16px', borderLeft: `4px solid ${gateStates[size.toLowerCase()] === 'open' ? '#4caf50' : '#f44336'}` }}>
+                  <h3 style={{ marginTop: 0 }}>{size} Mango Gate</h3>
+                  <p>Status: <span style={{ fontWeight: 'bold', color: gateStates[size.toLowerCase()] === 'open' ? '#4caf50' : '#f44336' }}>{gateStates[size.toLowerCase()] === 'open' ? '🔓 OPEN' : '🔒 CLOSED'}</span></p>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="control-button start-button" disabled={gateStates[size.toLowerCase()] === 'open'} onClick={() => fetch(`${BACKEND_URL}/api/hardware/gate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gate: size, action: 'open' }) })} style={{ flex: 1, padding: '10px' }}>Open</button>
+                    <button className="control-button stop-button" disabled={gateStates[size.toLowerCase()] === 'closed'} onClick={() => fetch(`${BACKEND_URL}/api/hardware/gate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gate: size, action: 'close' }) })} style={{ flex: 1, padding: '10px' }}>Close</button>
+                  </div>
+                </div>
               ))}
-            </tbody>
-            </table>
+            </div>
           </div>
-        </div>
-          </>
+        ) : currentView === 'change-password' ? (
+          <div className="change-password-panel">
+            <h2>Change Password</h2>
+            <form onSubmit={handleChangePassword} style={{ display: 'grid', gap: '14px' }}>
+              <label>Current Password<input type="password" value={pwCurrent} onChange={e => setPwCurrent(e.target.value)} required /></label>
+              <label>New Password<input type="password" value={pwNew} onChange={e => setPwNew(e.target.value)} required /></label>
+              <label>Confirm New Password<input type="password" value={pwConfirm} onChange={e => setPwConfirm(e.target.value)} required /></label>
+              <button type="submit" className="control-button start-button" style={{ width: '220px' }}>Save Password</button>
+              {passwordMessage && <p style={{ color: passwordMessage.includes('successfully') ? '#2e7d32' : '#d32f2f', fontWeight: 600 }}>{passwordMessage}</p>}
+            </form>
+          </div>
+        ) : currentView === 'settings' ? (
+          <div className="settings-panel">
+            <h2>Settings</h2>
+            <div className="settings-section">
+              <h3>Mango Detection</h3>
+              <div className="settings-grid">
+                {['Small', 'Medium', 'Large', 'Defective'].map((L) => (
+                  <label key={L}>{L} mango limit:
+                    <input type="number" min="0" value={settings[`limit${L}`]} onChange={e => setSettings(s => ({ ...s, [`limit${L}`]: Number(e.target.value) }))} />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="settings-actions">
+              <button type="button" className="control-button start-button" onClick={() => setPasswordMessage('Settings saved')}>Save Settings</button>
+              <button type="button" className="control-button stop-button" onClick={() => { setSettings(defaultSettings); setPasswordMessage('Settings reset'); }}>Reset to Defaults</button>
+            </div>
+          </div>
+        ) : (
+          <div className="batch-history-container">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2>Sorting History (Sessions)</h2>
+              <div>
+                <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
+                <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+              </div>
+            </div>
+            <div className="history-table-container">
+              <table className="history-table">
+                <thead>
+                  <tr>
+                    <th>Batch</th><th>Small</th><th>Medium</th><th>Large</th><th>Defective</th><th>Total</th><th>Start Time</th><th>End Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessions && sessions.map((s, idx) => (
+                    <tr key={s._id || idx}>
+                      {editingSessionId === s._id ? (
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <input value={editingName} onChange={e => setEditingName(e.target.value)} style={{ width: 200, padding: '6px 8px' }} />
+                            <button onClick={() => saveEditing(s._id)}>Save</button>
+                            <button onClick={cancelEditing}>Cancel</button>
+                          </div>
+                        </td>
+                      ) : (
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span>{s.session_name || `Batch ${idx + 1}`}</span>
+                            <button onClick={() => startEditing(s._id, s.session_name)} style={{ fontSize: 12, padding: '4px 8px' }}>Rename</button>
+                          </div>
+                        </td>
+                      )}
+                      <td>{s.counts?.small ?? 0}</td>
+                      <td>{s.counts?.medium ?? 0}</td>
+                      <td>{s.counts?.large ?? 0}</td>
+                      <td>{s.counts?.defective ?? 0}</td>
+                      <td>{(s.counts?.small||0) + (s.counts?.medium||0) + (s.counts?.large||0) + (s.counts?.defective||0)}</td>
+                      <td>{s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-'}</td>
+                      <td>{s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
     </div>

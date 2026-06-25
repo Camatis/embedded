@@ -142,10 +142,23 @@ def run_detection(frame):
                 distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
                 
                 if distance < 35:
+                    c1_name = str(det1["class"]).strip().lower()
                     c2_name = str(det2["class"]).strip().lower()
-                    is_det2_defective = 'not' not in c2_name and ('defect' in c2_name or 'bad' in c2_name or 'damaged' in c2_name or 'rotten' in c2_name)
-                    if is_det2_defective:
+
+                    is_c1_not_carabao = 'not carabao' in c1_name
+                    is_c2_not_carabao = 'not carabao' in c2_name
+                    
+                    is_c1_defective = 'not' not in c1_name and ('defect' in c1_name or 'bad' in c1_name or 'damaged' in c1_name or 'rotten' in c1_name)
+                    is_c2_defective = 'not' not in c2_name and ('defect' in c2_name or 'bad' in c2_name or 'damaged' in c2_name or 'rotten' in c2_name)
+
+                    # PRIORITY LOGIC:
+                    # 1. "Not Carabao" overrides everything else.
+                    # 2. "Defective" overrides "Not Defective" (if both are Carabao).
+                    if is_c2_not_carabao:
                         det1 = det2  
+                    elif is_c2_defective and not is_c1_not_carabao:
+                        det1 = det2  
+                        
                     skip_indices.add(j)
             
             x1, y1, x2, y2 = det1["box"]
@@ -220,7 +233,8 @@ def background_detect():
             for x1, y1, x2, y2, conf, cls_name in detection_boxes:
                 if cls_name:
                     cn = str(cls_name).strip().lower()
-                    if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
+                    # Only flag as defective if it is a Carabao mango
+                    if 'not carabao' not in cn and 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
                         is_defective = True
 
             with detection_cache_lock:
@@ -287,11 +301,15 @@ class CameraTrack(VideoStreamTrack):
 
 def draw_detection_boxes(frame, boxes):
     for x1, y1, x2, y2, conf, cls_name in boxes:
+        # Default bounding box is Green (Carabao / Not Defective)
         color = (0, 255, 0)  
+        
         if cls_name:
             cn = str(cls_name).strip().lower()
-            if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                color = (255, 0, 0)  
+            if 'not carabao' in cn:
+                color = (0, 255, 255) # Yellow box for "Not Carabao"
+            elif 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
+                color = (0, 0, 255)   # Red box for "Defective Carabao"
         
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{cls_name or 'Mango'} {conf:.2f}"
@@ -308,7 +326,6 @@ def offer():
     
     data = request.get_json() or {}
     
-    # FIXED: Safely intercept both nested data payloads and raw dictionary attributes
     sdp = data.get('sdp') or data.get('data', {}).get('sdp')
     sdp_type = data.get('type') or data.get('data', {}).get('type') or 'offer'
 
