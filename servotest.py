@@ -28,6 +28,7 @@ CORS(app)
 # PIN & STATE VARIABLES CONFIGURATION
 # ==========================================
 # --- IR Sensor Pins ---
+IR_ENTRANCE_PIN = 23 # NEW BREAK BEAM ENTRANCE SENSOR
 IR_TRIGGER_PIN = 17 
 IR_MEDIUM_PIN = 27   
 IR_LARGE_PIN = 22    
@@ -76,7 +77,12 @@ sorting_active = False
 sorting_paused = False
 ui_popup_active = False  
 hopper_active = True 
-ai_detection_state = {"multi_detection": False, "variety_error": False, "organic_error": False}
+ai_detection_state = {
+    "multi_detection": False, 
+    "variety_error": False, 
+    "organic_error": False, 
+    "entrance_violation": False
+}
 state_lock = threading.Lock()
 last_mango = {"size": None, "health": None, "timestamp": None}
 
@@ -108,6 +114,7 @@ def setup_hardware():
     GPIO.setwarnings(False)
 
     # Configure IR Sensors
+    GPIO.setup(IR_ENTRANCE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(IR_TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(IR_MEDIUM_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(IR_LARGE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -237,10 +244,12 @@ def set_conveyor_speed(target_speed, direction="FORWARD"):
             time.sleep(0.12)
 
 def set_machine_ready_leds():
+    """Green ON, Red OFF: Waiting for object"""
     GPIO.output(PIN_GREEN_LED, GPIO.HIGH)
     GPIO.output(PIN_RED_LED, GPIO.LOW)
 
 def set_machine_active_leds():
+    """Red ON, Green OFF: Scanning / Actuating"""
     GPIO.output(PIN_GREEN_LED, GPIO.LOW)
     GPIO.output(PIN_RED_LED, GPIO.HIGH)
 
@@ -332,7 +341,7 @@ def hardware_control():
     if action == 'start':
         sorting_active = True
         sorting_paused = False
-        set_machine_active_leds()
+        set_machine_ready_leds()
         set_conveyor_speed(CONVEYOR_SPEED, "FORWARD")
         return jsonify({'success': True, 'message': 'Sorting started'})
     elif action == 'pause':
@@ -341,11 +350,12 @@ def hardware_control():
         set_conveyor_speed(0)
         return jsonify({'success': True, 'message': 'Sorting paused'})
     elif action == 'resume' or action == 'continue':
+        # React clears the flags implicitly when sending this command
         ui_popup_active = False
-        ai_detection_state = {"multi_detection": False, "variety_error": False, "organic_error": False}
+        ai_detection_state = {"multi_detection": False, "variety_error": False, "organic_error": False, "entrance_violation": False}
         sorting_active = True
         sorting_paused = False
-        set_machine_active_leds()
+        set_machine_ready_leds()
         set_conveyor_speed(CONVEYOR_SPEED, "FORWARD")
         return jsonify({'success': True, 'message': 'Sorting resumed'})
     elif action == 'stop':
@@ -407,24 +417,55 @@ def route_large():
 # ==========================================
 # EXCLUSIONARY PIPELINE HANDLING ROUTINES
 # ==========================================
-def execute_mechanical_rejection(alert_type):
-    global sorting_active, sorting_paused, ui_popup_active
-    sorting_active = False
-    sorting_paused = True
-    ui_popup_active = True
+def execute_mechanical_rejection(error_key, log_message):
+    """Fires physical buzzer, halts conveyor, and reverses belt to eject item until entrance triggers."""
+    global ai_detection_state
     
-    print(f"🚨 HARDWARE CRITICAL ALERT: Triggering Rejection Mechanism via {alert_type}")
+    print(f"🚨 HARDWARE ALERT: {log_message}")
     set_conveyor_speed(0)
-    reset_servos_to_default_internal()
     
+    # 1. Fire audio alert & flag the React dashboard pop-up
     GPIO.output(PIN_BUZZER, GPIO.HIGH)
-    time.sleep(1.2)
+    ai_detection_state[error_key] = True
+    
+    # 2. Reverse until entrance sensor sees the object
+    print("◀️ Reversing conveyor to entrance...")
+    set_conveyor_speed(CONVEYOR_SPEED, "REVERSE")
+    
+    while GPIO.input(IR_ENTRANCE_PIN) == GPIO.HIGH:
+        time.sleep(0.05) 
+        
+    print("🛑 Object reached entrance. Stopping.")
+    set_conveyor_speed(0)
     GPIO.output(PIN_BUZZER, GPIO.LOW)
     
-    print("◀️ REVERSING CONVEYOR ACTUATORS TO EJECT FROM ENTRY PORT...")
-    set_conveyor_speed(CONVEYOR_SPEED, "REVERSE")
-    time.sleep(2.5)
-    set_conveyor_speed(0)
+    # 3. Wait for operator to remove it
+    print("Waiting for operator to clear the entrance...")
+    while GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+        time.sleep(0.1)
+        
+    # 4. Clear popups & resume
+    print("✅ Entrance cleared. Resuming normal operation.")
+    ai_detection_state[error_key] = False
+    set_conveyor_speed(CONVEYOR_SPEED, "FORWARD")
+
+def check_entrance_during_scan():
+    """Interrupts the active scan timer if a new object breaks the entrance beam early."""
+    if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+        print("🚨 Entrance violation during scan! Object entered too early.")
+        set_conveyor_speed(0)
+        GPIO.output(PIN_BUZZER, GPIO.HIGH)
+        ai_detection_state["entrance_violation"] = True
+        
+        while GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+            time.sleep(0.1) 
+            
+        GPIO.output(PIN_BUZZER, GPIO.LOW)
+        ai_detection_state["entrance_violation"] = False
+        print("✅ Entrance cleared. Restarting scan.")
+        set_conveyor_speed(CONVEYOR_SPEED, "FORWARD")
+        return True 
+    return False
 
 def scan_vision_pipeline():
     is_defective = False
@@ -481,8 +522,12 @@ def autonomous_sorting_loop():
             if not sorting_active:
                 time.sleep(0.1)
                 continue
+            
+            # --- READY STATE (GREEN LIGHT ON) ---
+            set_machine_ready_leds()
                 
             if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
+                # --- SCANNING STATE (RED LIGHT ON) ---
                 set_machine_active_leds()
                 print("\n🥭 MANGO DETECTED IN CHAMBER!")
                 print("🛑 STOPPING BELT FOR FIRST SIDE SCAN...")
@@ -493,18 +538,15 @@ def autonomous_sorting_loop():
                 is_defective, multi_mango, variety_valid, organic_valid = scan_vision_pipeline()
                 
                 if multi_mango:
-                    ai_detection_state["multi_detection"] = True
-                    execute_mechanical_rejection("MULTI_MANGO_TRAP")
+                    execute_mechanical_rejection("multi_detection", "MULTI-MANGO TRAP TRIGGERED")
                     continue
                 
                 if not organic_valid:
-                    ai_detection_state["organic_error"] = True
-                    execute_mechanical_rejection("NON_ORGANIC_OBJECT_ALERT")
+                    execute_mechanical_rejection("organic_error", "NO CARABAO MANGOES DETECTED")
                     continue
                 
                 if not variety_valid:
-                    ai_detection_state["variety_error"] = True
-                    execute_mechanical_rejection("FOREIGN_VARIETY_ABORT")
+                    execute_mechanical_rejection("variety_error", "FOREIGN VARIETY ABORT")
                     continue
                 
                 if is_defective:
@@ -526,13 +568,11 @@ def autonomous_sorting_loop():
                 is_defective, multi_mango, variety_valid, organic_valid = scan_vision_pipeline()
                 
                 if multi_mango:
-                    ai_detection_state["multi_detection"] = True
-                    execute_mechanical_rejection("MULTI_MANGO_TRAP")
+                    execute_mechanical_rejection("multi_detection", "MULTI-MANGO TRAP TRIGGERED")
                     continue
                     
                 if not variety_valid:
-                    ai_detection_state["variety_error"] = True
-                    execute_mechanical_rejection("FOREIGN_VARIETY_ABORT")
+                    execute_mechanical_rejection("variety_error", "FOREIGN VARIETY ABORT")
                     continue
                 
                 if is_defective:
@@ -546,18 +586,29 @@ def autonomous_sorting_loop():
                     set_conveyor_speed(CONVEYOR_SPEED, "FORWARD")
                     continue
 
-                # --- RUN SIZING SECTOR SENSOR MATRIX ---
+                # --- RUN SIZING SECTOR SENSOR MATRIX (WITH INTERRUPT PROTOCOL) ---
                 print("🎯 DECISION: Mango skin is healthy! Starting sizing run...")
                 set_conveyor_speed(CONVEYOR_SPEED, "FORWARD")
                 
-                detected_size = "SMALL" 
-                end_time = time.time() + SIZE_SCAN_DURATION
-                while time.time() < end_time:
-                    if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
-                        detected_size = "LARGE"
-                    elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
-                        detected_size = "MEDIUM"
-                    time.sleep(0.01) 
+                sizing_complete = False
+                while not sizing_complete:
+                    detected_size = "SMALL" 
+                    end_time = time.time() + SIZE_SCAN_DURATION
+                    violation_occurred = False
+                    
+                    while time.time() < end_time:
+                        if check_entrance_during_scan():
+                            violation_occurred = True
+                            break 
+                            
+                        if GPIO.input(IR_LARGE_PIN) == GPIO.LOW:
+                            detected_size = "LARGE"
+                        elif GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW and detected_size != "LARGE":
+                            detected_size = "MEDIUM"
+                        time.sleep(0.01) 
+                        
+                    if not violation_occurred:
+                        sizing_complete = True
 
                 threading.Thread(target=operate_stopper).start() 
                 
@@ -597,10 +648,8 @@ def autonomous_sorting_loop():
 # MASTER ENTRY INVOCATION LOOP
 # ==========================================
 if __name__ == '__main__':
-    # 1. Safely run hardware and pin configurations
     setup_hardware()
 
-    # 2. Bind mechatronic processing components to persistent daemon loops
     sorting_thread = threading.Thread(target=autonomous_sorting_loop)
     sorting_thread.daemon = True
     sorting_thread.start()
@@ -609,7 +658,6 @@ if __name__ == '__main__':
     hopper_thread.daemon = True 
     hopper_thread.start()
 
-    # 3. Fire local network proxy interfaces
     flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False))
     flask_thread.daemon = True
     flask_thread.start()

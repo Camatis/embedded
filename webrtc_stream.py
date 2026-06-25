@@ -20,6 +20,11 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from av import VideoFrame
 from picamera2 import Picamera2
 
+# Mute Flask server default terminal logging spam for clean hardware logs
+import logging
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"]}})
 pcs = set()
@@ -127,6 +132,7 @@ def run_detection(frame):
         final_detections = []
         skip_indices = set()
 
+        # PRIORITY RESOLUTION: Handle overlapping boxes (e.g., Defective vs Not Carabao)
         for i, det1 in enumerate(raw_detections):
             if i in skip_indices:
                 continue
@@ -151,7 +157,6 @@ def run_detection(frame):
                     is_c1_defective = 'not' not in c1_name and ('defect' in c1_name or 'bad' in c1_name or 'damaged' in c1_name or 'rotten' in c1_name)
                     is_c2_defective = 'not' not in c2_name and ('defect' in c2_name or 'bad' in c2_name or 'damaged' in c2_name or 'rotten' in c2_name)
 
-                    # PRIORITY LOGIC:
                     # 1. "Not Carabao" overrides everything else.
                     # 2. "Defective" overrides "Not Defective" (if both are Carabao).
                     if is_c2_not_carabao:
@@ -200,7 +205,6 @@ def background_capture():
 
             time.sleep(1 / CAMERA_FPS) 
         except Exception as e:
-            print(f"⚠ Capture error bypass: {e}")
             time.sleep(0.1)
 
 def background_detect():
@@ -292,7 +296,6 @@ class CameraTrack(VideoStreamTrack):
             video_frame.time_base = time_base
             return video_frame
         except Exception as e:
-            print(f"⚠ WebRTC Frame conversion error: {e}")
             black = np.zeros((self.height, self.width, 3), np.uint8)
             video_frame = VideoFrame.from_ndarray(black, format='rgb24')
             video_frame.pts = pts
@@ -300,16 +303,17 @@ class CameraTrack(VideoStreamTrack):
             return video_frame
 
 def draw_detection_boxes(frame, boxes):
+    """Draws boxes utilizing OpenCV BGR Color Format."""
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        # Default bounding box is Green (Carabao / Not Defective)
+        # Default bounding box is Green in BGR (Good Carabao)
         color = (0, 255, 0)  
         
         if cls_name:
             cn = str(cls_name).strip().lower()
             if 'not carabao' in cn:
-                color = (0, 255, 255) # Yellow box for "Not Carabao"
+                color = (0, 255, 255) # Yellow in BGR for "Not Carabao"
             elif 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                color = (0, 0, 255)   # Red box for "Defective Carabao"
+                color = (0, 0, 255)   # Red in BGR for "Defective"
         
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{cls_name or 'Mango'} {conf:.2f}"
@@ -375,15 +379,6 @@ def detection():
                 for x1, y1, x2, y2, conf, cls_name in last_detections
             ]
         })
-
-@app.route('/api/detections', methods=['GET'])
-def get_detections():
-    global last_detections, last_multi_detection
-    with detection_cache_lock:
-        detections_formatted = []
-        for x1, y1, x2, y2, conf, cls_name in last_detections:
-            detections_formatted.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'confidence': conf, 'class': cls_name})
-        return jsonify({'detections': detections_formatted, 'count': len(detections_formatted), 'multi_detection': last_multi_detection, 'timestamp': time.time()})
 
 @app.route('/', methods=['GET'])
 def home():

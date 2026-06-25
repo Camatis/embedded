@@ -28,8 +28,14 @@ function Dashboard({ user, token, onLogout }) {
     defective: 0
   });
 
-  // Defective flag
+  // Defective flag & Pop-up States
   const [isDefective, setIsDefective] = useState(false);
+  const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
+  const [showTwoMangoesPopup, setShowTwoMangoesPopup] = useState(false);
+  const [showEntrancePopup, setShowEntrancePopup] = useState(false);
+  const [showNotCarabaoPopup, setShowNotCarabaoPopup] = useState(false);
+  const [showNoMangoPopup, setShowNoMangoPopup] = useState(false);
+
   const [sortingHistory, setSortingHistory] = useState([]);
 
   // Session and batch management
@@ -60,10 +66,8 @@ function Dashboard({ user, token, onLogout }) {
   const [cpuTemp, setCpuTemp] = useState(45);
   const [hardwareAlert, setHardwareAlert] = useState('');
   const [showTempPopup, setShowTempPopup] = useState(false);
-  const [isDefectiveFlag, setIsDefectiveFlag] = useState(false);
   const [limitAlert, setLimitAlert] = useState('');
   const [showLimitAlert, setShowLimitAlert] = useState(false);
-  const [showTwoMangoesPopup, setShowTwoMangoesPopup] = useState(false);
   
   // Gate state tracking
   const [gateStates, setGateStates] = useState({
@@ -72,7 +76,6 @@ function Dashboard({ user, token, onLogout }) {
     large: 'closed'
   });
 
-  // Fixed targeting port allocation mapping (targeting backend-express proxy route)
   const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}:5001`;
 
   const tutorialSteps = [
@@ -92,11 +95,9 @@ function Dashboard({ user, token, onLogout }) {
   const [pwConfirm, setPwConfirm] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
 
-  // Track counts with ref
   const countsRef = useRef({ small: 0, medium: 0, large: 0, defective: 0, total: 0 });
   const autoSaveIntervalRef = useRef(null);
 
-  // Auto-save counts to database every 30 seconds during active batch
   const startAutoSave = (sessionId) => {
     if (autoSaveIntervalRef.current) clearInterval(autoSaveIntervalRef.current);
     
@@ -127,8 +128,6 @@ function Dashboard({ user, token, onLogout }) {
             }
           })
         });
-        
-        if (!res.ok) console.warn('Auto-save failed with status:', res.status);
       } catch (err) {
         console.error('Auto-save error:', err);
       }
@@ -184,7 +183,6 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  // OPTIMIZED: Implemented frontend ICE state auto-reconnect fallback loop to prevent feed freezes
   const initWebRTCStream = async () => {
     if (!videoRef.current) return;
 
@@ -210,7 +208,6 @@ function Dashboard({ user, token, onLogout }) {
 
       pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
-        console.log("WebRTC Connection State Change:", state);
         
         if (state === 'connected' || state === 'completed') {
           setCameraStatus('WebRTC stream connected');
@@ -218,15 +215,12 @@ function Dashboard({ user, token, onLogout }) {
         } else if (state === 'failed' || state === 'disconnected') {
           setCameraStatus(`Connection ${state}. Reconnecting...`);
           setWebrtcReady(false);
-          
-          // Trigger hot reload loop recovery
           setTimeout(() => {
             setCameraReloadKey(prev => prev + 1);
           }, 2000);
         }
       };
 
-      // Handle stream track negotiations
       pc.addTransceiver('video', { direction: 'recvonly' });
 
       const offer = await pc.createOffer();
@@ -245,7 +239,6 @@ function Dashboard({ user, token, onLogout }) {
       setCameraStatus('WebRTC stream is live');
       setWebrtcReady(true);
     } catch (err) {
-      console.error('WebRTC init error:', err);
       setCameraError(err.message || 'Unable to start WebRTC stream');
       setCameraStatus('WebRTC stream failed');
       setWebrtcReady(false);
@@ -350,9 +343,6 @@ function Dashboard({ user, token, onLogout }) {
           setDetectedSize('DEFECTIVE');
           setIsDefective(true);
           setIsDefectiveFlag(true);
-        } else {
-          setIsDefective(false);
-          setIsDefectiveFlag(false);
         }
         return;
       }
@@ -368,9 +358,6 @@ function Dashboard({ user, token, onLogout }) {
           return updated;
         });
       } else {
-        setIsDefective(false);
-        setIsDefectiveFlag(false);
-
         let sizeIndex = null;
         if (typeof data.detectedSize === 'string') {
           const mapped = data.detectedSize.trim().toUpperCase();
@@ -429,7 +416,6 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  // Poll sensor telemetry entries from hardware express routing layer
   useEffect(() => {
     setSensorStates(prev => ({
       small: { ...prev.small, status: 'Active' },
@@ -470,7 +456,6 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, [sessionActive, sessionPaused]);
 
-  // CPU temperature monitor (RPi thermal zone pooling)
   useEffect(() => {
     const fetchTemp = async () => {
       try {
@@ -535,7 +520,6 @@ function Dashboard({ user, token, onLogout }) {
     }
   }, [user]);
 
-  // Poll physical gate servo feedbacks
   useEffect(() => {
     let mounted = true;
     const pollGateStatus = async () => {
@@ -559,7 +543,7 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
-  // Poll detection status for multi-mango alerts WITH MECHATRONIC OVERRIDE
+  // UPDATED: Poll detection status for all AI traps and clear Ghost Defective states
   useEffect(() => {
     let mounted = true;
     const pollDetectionStatus = async () => {
@@ -568,15 +552,17 @@ function Dashboard({ user, token, onLogout }) {
         const res = await fetch(apiUrl);
         if (res.ok) {
           const data = await res.json();
-          if (mounted && data.multi_detection === true) {
-            // 1. Show the pop-up warning
-            setShowTwoMangoesPopup(true);
-            console.log('Multiple mangoes detected!');
+          if (mounted) {
+            // Read hardware state flags to trigger React Modals
+            setShowTwoMangoesPopup(data.multi_detection);
+            setShowNotCarabaoPopup(data.variety_error);
+            setShowNoMangoPopup(data.organic_error);
+            setShowEntrancePopup(data.entrance_violation);
             
-            // 2. Automatically trigger the mechanical pause ONLY if the batch is currently running
-            if (sessionActive && !sessionPaused) {
-              console.log('Safety Protocol: Pausing batch due to multiple mangoes.');
-              pauseBatch();
+            // Fix "Ghost Defective" issue
+            if (data.is_defective === false) {
+                setIsDefectiveFlag(false);
+                setIsDefective(false);
             }
           }
         }
@@ -664,7 +650,7 @@ function Dashboard({ user, token, onLogout }) {
       doc.text('OFFICIAL QUALITY CONTROL & YIELD REPORT', margin, 22);
 
       y = 44;
-      const username = user?.username || 'vince@email.com';
+      const username = user?.username || 'admin';
       const today = new Date();
       doc.text(`Operator: ${username}`, margin, y); y += 6;
       doc.text(`Date of Export: ${today.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}`, margin, y); y += 6;
@@ -949,6 +935,7 @@ function Dashboard({ user, token, onLogout }) {
 
   return (
     <div className={`dashboard ${menuOpen ? 'menu-open' : ''}`}>
+      {/* -------------------- MODAL POP-UPS -------------------- */}
       {showTutorial && (
         <div className="tutorial-overlay" onClick={(e)=>e.stopPropagation()}>
           <div className="tutorial-box">
@@ -974,11 +961,34 @@ function Dashboard({ user, token, onLogout }) {
         </div>
       )}
       {showTwoMangoesPopup && (
-        <div className="tutorial-overlay" onClick={() => setShowTwoMangoesPopup(false)}>
+        <div className="tutorial-overlay">
           <div className="tutorial-box">
-            <div className="tutorial-close" onClick={() => setShowTwoMangoesPopup(false)}>✕</div>
             <h3 style={{ color: 'orange' }}>⚠️ More than one mango detected</h3>
-            <p>Multiple mangoes were detected on the conveyor. Please inspect the system.</p>
+            <p>Multiple mangoes were detected on the conveyor. Conveyor is reversing. Please remove the objects from the entrance.</p>
+          </div>
+        </div>
+      )}
+      {showEntrancePopup && (
+        <div className="tutorial-overlay">
+          <div className="tutorial-box">
+            <h3 style={{ color: 'orange' }}>⚠️ Entrance Violation</h3>
+            <p>Object entered while a scan was ongoing. Please clear the entrance sensor. Belt will resume automatically.</p>
+          </div>
+        </div>
+      )}
+      {showNotCarabaoPopup && (
+        <div className="tutorial-overlay">
+          <div className="tutorial-box">
+            <h3 style={{ color: 'red' }}>🚫 Not Carabao Mango Detected</h3>
+            <p>Conveyor is reversing. Please remove the object from the entrance. Belt will resume automatically.</p>
+          </div>
+        </div>
+      )}
+      {showNoMangoPopup && (
+        <div className="tutorial-overlay">
+          <div className="tutorial-box">
+            <h3 style={{ color: 'red' }}>🚫 No Carabao Mangoes Detected</h3>
+            <p>Non-organic or unrecognized object detected. Conveyor is reversing. Please remove the object from the entrance.</p>
           </div>
         </div>
       )}
@@ -992,6 +1002,7 @@ function Dashboard({ user, token, onLogout }) {
         </div>
       )}
 
+      {/* -------------------- SIDEBAR MENU -------------------- */}
       <div ref={overlayRef} className={`menu-overlay ${menuOpen ? 'open' : ''}`}>
         <div className="menu-inner">
           <div className="user-avatar">
@@ -1024,6 +1035,7 @@ function Dashboard({ user, token, onLogout }) {
         </div>
       </header>
 
+      {/* -------------------- MAIN CONTENT -------------------- */}
       <div className="parent">
         {currentView === 'dashboard' ? (
           <div className="dashboard-container">
@@ -1158,7 +1170,10 @@ function Dashboard({ user, token, onLogout }) {
               <h2>Sorting History (Sessions)</h2>
               <div>
                 <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
-                <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+                {/* -------------------- ADMIN CLEAR BUTTON -------------------- */}
+                {user && user.role === 'admin' && (
+                  <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+                )}
               </div>
             </div>
             <div className="history-table-container">
