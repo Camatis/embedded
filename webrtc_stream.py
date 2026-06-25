@@ -158,34 +158,39 @@ class CameraTrack(VideoStreamTrack):
 def offer():
     data = request.get_json()
     print('📨 /offer received')
-    pc = RTCPeerConnection()
-    pcs.add(pc)
-    pc.addTrack(CameraTrack())
-    
-    async def negotiate():
+
+    # Ensure background asyncio loop is running
+    global loop, _event_loop_thread
+    if loop is None:
+        if _event_loop_thread is None or not _event_loop_thread.is_alive():
+            _event_loop_thread = threading.Thread(target=_start_event_loop, daemon=True)
+            _event_loop_thread.start()
+
+        wait_start = 0
+        while loop is None and wait_start < 5:
+            time.sleep(0.1)
+            wait_start += 0.1
+
+    if loop is None:
+        return jsonify({'error': 'Asyncio event loop failed to start'}), 500
+
+    async def handle_offer():
+        pc = RTCPeerConnection()
+        pcs.add(pc)
+        pc.addTrack(CameraTrack())
+
         await pc.setRemoteDescription(RTCSessionDescription(sdp=data['sdp'], type=data['type']))
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
         return pc.localDescription
 
-    # Ensure background asyncio loop is running
-    global loop, _event_loop_thread
-    if loop is None:
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # Start our background loop if none exists
-            if _event_loop_thread is None or not _event_loop_thread.is_alive():
-                _event_loop_thread = threading.Thread(target=_start_event_loop, daemon=True)
-                _event_loop_thread.start()
-            # wait briefly for loop to start
-            wait_start = 0
-            while loop is None and wait_start < 5:
-                time.sleep(0.1)
-                wait_start += 0.1
+    try:
+        future = asyncio.run_coroutine_threadsafe(handle_offer(), loop)
+        local_desc = future.result(timeout=10)
+    except Exception as e:
+        print('❌ WebRTC offer error:', e)
+        return jsonify({'error': str(e)}), 500
 
-    future = asyncio.run_coroutine_threadsafe(negotiate(), loop)
-    local_desc = future.result()
     print('✅ /offer answered')
     return jsonify({'sdp': local_desc.sdp, 'type': local_desc.type})
 

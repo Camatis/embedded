@@ -238,9 +238,12 @@ function Dashboard({ user, token, onLogout }) {
         body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
       });
 
-      const answer = await response.json();
-      if (!response.ok) throw new Error(answer.message || 'WebRTC offer failed');
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`WebRTC offer failed (${response.status}): ${text}`);
+      }
 
+      const answer = await response.json();
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
       setCameraStatus('WebRTC stream is live');
       setWebrtcReady(true);
