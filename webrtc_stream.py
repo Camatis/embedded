@@ -68,7 +68,7 @@ def get_color_and_status(cls_name):
 def run_detection(frame):
     """Run YOLO inference."""
     if yolo_model is None: return []
-    results = yolo_model(frame, verbose=False, conf=0.4, iou=0.45, imgsz=480)
+    results = yolo_model(frame, verbose=False, conf=0.6, iou=0.45, imgsz=480)
     final_dets = []
     if results and len(results) > 0:
         for box in results[0].boxes:
