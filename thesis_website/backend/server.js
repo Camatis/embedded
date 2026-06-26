@@ -193,13 +193,21 @@ async function startHardwareProcess() {
       const message = `Hardware process started but not ready within ${HARDWARE_READY_TIMEOUT_MS}ms. It may still be warming up.`;
       console.warn(message);
       if (hardwareProcess && hardwareProcess.exitCode !== null) {
-        console.error(`Hardware process exited with code ${hardwareProcess.exitCode}`);
+        const exitCode = hardwareProcess.exitCode;
+        console.error(`Hardware process exited with code ${exitCode}`);
         hardwareProcess = null;
-        return { success: false, message: `Hardware failed to start: exited with code ${hardwareProcess.exitCode}` };
+        return { success: false, message: `Hardware failed to start: exited with code ${exitCode}` };
+      }
+      // Process is still alive but Flask isn't responding yet — wait for it before returning.
+      const secondChance = await waitForHardwareReady();
+      if (!secondChance) {
+        hardwareProcess = null;
+        hardwareRunning = false;
+        return { success: false, message: `Hardware process did not become ready within ${HARDWARE_READY_TIMEOUT_MS * 2}ms` };
       }
       writeHardwareControlFile(true);
       hardwareRunning = true;
-      return { success: true, starting: true, message };
+      return { success: true, message: 'Hardware process ready (after extended wait)' };
     }
 
     writeHardwareControlFile(true);
@@ -1181,7 +1189,7 @@ app.post('/api/hardware/pause', async (req, res) => {
 app.post('/api/hardware/continue', async (req, res) => {
   try {
     await ensureHardwareProcessRunning();
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'continue' });
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'resume' });
     res.json({ success: true, message: 'Hardware controller continued' });
   } catch (error) {
     console.error('Error continuing sorting:', error?.message || error);
