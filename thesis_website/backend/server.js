@@ -589,10 +589,10 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
 // POST: Create a new session
 app.post('/api/sessions', verifyToken, async (req, res) => {
   const { userId } = await getRequestUserContext(req);
+  // Don't pre-assign _id — let MongoDB generate an ObjectId so the PUT
+  // endpoint can look it up via isValidSessionObjectId later.
   const payload = { ...req.body, userId };
-  if (!payload._id) {
-    payload._id = `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  }
+  delete payload._id;
   const session = new Session(payload);
 
   try {
@@ -601,6 +601,8 @@ app.post('/api/sessions', verifyToken, async (req, res) => {
   } catch (err) {
     console.warn('Cloud save failed, falling back to local queue:', err.message || err);
     try {
+      // Assign offline ID only for local storage fallback.
+      payload._id = `offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const localSaved = await enqueueBatch(payload);
       return res.status(201).json(localSaved);
     } catch (localErr) {
@@ -748,7 +750,17 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
     let updatedSession;
     try {
       if (isValidSessionObjectId(sessionId)) {
-        updatedSession = await Session.findByIdAndUpdate(sessionId, updateData, { new: true });
+        // Convert nested timestamps object to dot-notation so MongoDB's $set
+        // only updates the specific field instead of replacing the whole subdocument
+        // (which would wipe out start_time when only end_time is being saved).
+        const mongoUpdate = { ...updateData };
+        if (mongoUpdate.timestamps) {
+          const ts = mongoUpdate.timestamps;
+          delete mongoUpdate.timestamps;
+          if (ts.end_time !== undefined) mongoUpdate['timestamps.end_time'] = ts.end_time;
+          if (ts.start_time !== undefined) mongoUpdate['timestamps.start_time'] = ts.start_time;
+        }
+        updatedSession = await Session.findByIdAndUpdate(sessionId, mongoUpdate, { new: true });
       }
     } catch (err) {
       console.warn('Cloud update failed for session:', err.message || err);
