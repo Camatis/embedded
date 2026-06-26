@@ -86,8 +86,9 @@ def cleanup_hardware():
         
         if 'conveyor_pwm' in globals():
             conveyor_pwm.stop()
-            GPIO.output(RPWM, GPIO.LOW)
-            GPIO.output(LPWM, GPIO.LOW)
+        if 'conveyor_pwm_reverse' in globals():
+            conveyor_pwm_reverse.stop()
+        if 'conveyor_pwm' in globals() or 'conveyor_pwm_reverse' in globals():
             GPIO.output(R_EN, GPIO.LOW)
             GPIO.output(L_EN, GPIO.LOW)
             print('✅ Conveyor stopped')
@@ -203,26 +204,45 @@ GPIO.setup(L_EN, GPIO.OUT)
 
 conveyor_pwm = GPIO.PWM(RPWM, 100)
 conveyor_pwm.start(0)
+conveyor_pwm_reverse = GPIO.PWM(LPWM, 100)
+conveyor_pwm_reverse.start(0)
 
 # Enable both H-bridge channels at startup (required for BTS7960 to drive in either direction)
 GPIO.output(R_EN, GPIO.HIGH)
 GPIO.output(L_EN, GPIO.HIGH)
-GPIO.output(LPWM, GPIO.LOW)
 
 CONVEYOR_SPEED = 75
+CONVEYOR_RAMP_STEP = 5
+CONVEYOR_RAMP_DELAY = 0.05
+current_conveyor_speed = 0
+conveyor_lock = threading.Lock()
 
 def set_conveyor_speed(target_speed, reverse=False):
+    global current_conveyor_speed, conveyor_state
     target_speed = max(0, min(100, target_speed))
-    if reverse:
-        conveyor_pwm.ChangeDutyCycle(0)   # zero RPWM before enabling reverse
-        GPIO.output(R_EN, GPIO.LOW)
-        GPIO.output(L_EN, GPIO.HIGH)
-        GPIO.output(LPWM, GPIO.HIGH)
-    else:
-        GPIO.output(LPWM, GPIO.LOW)       # clear reverse signal so H-bridge doesn't brake
-        GPIO.output(L_EN, GPIO.HIGH)      # keep both enable pins HIGH for forward drive
-        GPIO.output(R_EN, GPIO.HIGH)
-        conveyor_pwm.ChangeDutyCycle(target_speed)
+    with conveyor_lock:
+        if reverse:
+            # Zero forward PWM first to prevent cross-conduction
+            conveyor_pwm.ChangeDutyCycle(0)
+            current_conveyor_speed = 0
+            GPIO.output(R_EN, GPIO.HIGH)
+            GPIO.output(L_EN, GPIO.HIGH)
+            conveyor_pwm_reverse.ChangeDutyCycle(target_speed)
+            conveyor_state = 'reversing' if target_speed > 0 else 'stopped'
+        else:
+            # Zero reverse PWM first
+            conveyor_pwm_reverse.ChangeDutyCycle(0)
+            GPIO.output(R_EN, GPIO.HIGH)
+            GPIO.output(L_EN, GPIO.HIGH)
+            # Gradual ramp up or down
+            speed = current_conveyor_speed
+            while speed != target_speed:
+                speed = min(speed + CONVEYOR_RAMP_STEP, target_speed) if target_speed > speed \
+                    else max(speed - CONVEYOR_RAMP_STEP, target_speed)
+                conveyor_pwm.ChangeDutyCycle(speed)
+                time.sleep(CONVEYOR_RAMP_DELAY)
+            current_conveyor_speed = target_speed
+            conveyor_state = 'running' if target_speed > 0 else 'stopped'
 
 def reverse_conveyor_timed(seconds=1.0):
     print("🔄 REVERSING CONVEYOR...")
