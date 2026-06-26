@@ -205,13 +205,15 @@ CONVEYOR_SPEED = 75
 def set_conveyor_speed(target_speed, reverse=False):
     target_speed = max(0, min(100, target_speed))
     if reverse:
+        conveyor_pwm.ChangeDutyCycle(0)   # zero RPWM before enabling reverse
         GPIO.output(R_EN, GPIO.LOW)
         GPIO.output(L_EN, GPIO.HIGH)
-        GPIO.output(LPWM, GPIO.HIGH) 
+        GPIO.output(LPWM, GPIO.HIGH)
     else:
+        GPIO.output(LPWM, GPIO.LOW)       # clear reverse signal so H-bridge doesn't brake
         GPIO.output(L_EN, GPIO.LOW)
         GPIO.output(R_EN, GPIO.HIGH)
-    conveyor_pwm.ChangeDutyCycle(target_speed)
+        conveyor_pwm.ChangeDutyCycle(target_speed)
 
 def reverse_conveyor_timed(seconds=1.0):
     print("🔄 REVERSING CONVEYOR...")
@@ -299,8 +301,14 @@ def autonomous_sorting_loop():
             continue
 
         set_led("READY")
+        set_conveyor_speed(CONVEYOR_SPEED)  # keep belt running while waiting for mango
 
         if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
+            time.sleep(0.03)  # 30 ms debounce — ignore brief noise spikes
+            if GPIO.input(IR_TRIGGER_PIN) != GPIO.LOW:
+                time.sleep(0.01)
+                continue
+            print(f'[TRIGGER] Mango at scan chamber. entrance={GPIO.input(IR_ENTRANCE_PIN)}')
             set_led("BUSY")
             set_conveyor_speed(0)
 
@@ -424,7 +432,9 @@ def hardware_control():
         sorting_paused = False
         batch_state = 'running'
         conveyor_state = 'running'
+        set_led("READY")
         set_conveyor_speed(CONVEYOR_SPEED)
+        print(f'[START] trigger={GPIO.input(IR_TRIGGER_PIN)} entrance={GPIO.input(IR_ENTRANCE_PIN)}')
         return jsonify({'success': True, 'message': 'Sorting started'})
     elif action == 'pause':
         sorting_active = False
