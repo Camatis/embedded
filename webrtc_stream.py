@@ -249,6 +249,9 @@ class CameraTrack(VideoStreamTrack):
 
         try:
             frame = np.ascontiguousarray(frame)
+            # Picamera2 capture_array() returns BGR despite RGB888 format label;
+            # convert to RGB so VideoFrame rgb24 displays correct colors.
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
             video_frame.pts = pts
             video_frame.time_base = time_base
