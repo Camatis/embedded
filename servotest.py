@@ -204,6 +204,11 @@ GPIO.setup(L_EN, GPIO.OUT)
 conveyor_pwm = GPIO.PWM(RPWM, 100)
 conveyor_pwm.start(0)
 
+# Enable both H-bridge channels at startup (required for BTS7960 to drive in either direction)
+GPIO.output(R_EN, GPIO.HIGH)
+GPIO.output(L_EN, GPIO.HIGH)
+GPIO.output(LPWM, GPIO.LOW)
+
 CONVEYOR_SPEED = 75
 
 def set_conveyor_speed(target_speed, reverse=False):
@@ -215,7 +220,7 @@ def set_conveyor_speed(target_speed, reverse=False):
         GPIO.output(LPWM, GPIO.HIGH)
     else:
         GPIO.output(LPWM, GPIO.LOW)       # clear reverse signal so H-bridge doesn't brake
-        GPIO.output(L_EN, GPIO.LOW)
+        GPIO.output(L_EN, GPIO.HIGH)      # keep both enable pins HIGH for forward drive
         GPIO.output(R_EN, GPIO.HIGH)
         conveyor_pwm.ChangeDutyCycle(target_speed)
 
@@ -266,6 +271,69 @@ small_gate.angle = GATE_CLOSED
 medium_gate.angle = GATE_CLOSED
 large_gate.angle = GATE_CLOSED
 initial_startup_drop()
+
+# ==========================================
+# TIMING CONSTANTS
+# ==========================================
+SIZE_SCAN_DURATION = 3.0
+SMALL_DROP_TIME   = 2.0
+MEDIUM_DROP_TIME  = 2.3
+LARGE_DROP_TIME   = 3.5
+
+# ==========================================
+# DELIVERY / ROUTING HELPERS
+# ==========================================
+def operate_hopper_cycle():
+    print('   🔄 HOPPER: Cycling next mango...')
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+    set_hopper(HOPPER_90_TICK)
+    time.sleep(1.0)
+    set_hopper(HOPPER_REST)
+    time.sleep(HOPPER_FULL_TRAVEL)
+
+def execute_defective_delivery():
+    print('   🚨 EXECUTING DEFECTIVE DELIVERY ROUTE...')
+    set_conveyor_speed(CONVEYOR_SPEED)
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(LARGE_DROP_TIME)
+    barrier_gate.angle = BARRIER_LOCKED
+    operate_hopper_cycle()
+
+def execute_small_delivery():
+    print('   🎯 SMALL ROUTE...')
+    small_gate.angle = GATE_OPEN
+    barrier_gate.angle = BARRIER_RELEASED
+    gate_states['small'] = 'open'
+    time.sleep(SMALL_DROP_TIME)
+    small_gate.angle = GATE_CLOSED
+    barrier_gate.angle = BARRIER_LOCKED
+    gate_states['small'] = 'closed'
+    operate_hopper_cycle()
+
+def execute_medium_delivery():
+    print('   🎯 MEDIUM ROUTE...')
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(0.8)
+    medium_gate.angle = GATE_OPEN
+    gate_states['medium'] = 'open'
+    time.sleep(MEDIUM_DROP_TIME)
+    medium_gate.angle = GATE_CLOSED
+    barrier_gate.angle = BARRIER_LOCKED
+    gate_states['medium'] = 'closed'
+    operate_hopper_cycle()
+
+def execute_large_delivery():
+    print('   🎯 LARGE ROUTE...')
+    barrier_gate.angle = BARRIER_RELEASED
+    time.sleep(2.2)
+    large_gate.angle = GATE_OPEN
+    gate_states['large'] = 'open'
+    time.sleep(LARGE_DROP_TIME)
+    large_gate.angle = GATE_CLOSED
+    barrier_gate.angle = BARRIER_LOCKED
+    gate_states['large'] = 'closed'
+    operate_hopper_cycle()
 
 # ==========================================
 # 5. MAIN AUTONOMOUS SENSOR LOOP
@@ -391,10 +459,41 @@ def autonomous_sorting_loop():
                     'distance': None
                 }
                 set_led("READY")
+                execute_defective_delivery()
                 set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
-            # [.. Size sorting logic ..]
+            # Size sorting: run belt through IR size sensors
+            count_total += 1
+            print(f'▶️  STARTING BELT FOR SIZE DETECTION ({SIZE_SCAN_DURATION} seconds)...')
+            set_conveyor_speed(CONVEYOR_SPEED)
+
+            detected_size = 'SMALL'
+            end_time = time.time() + SIZE_SCAN_DURATION
+            while time.time() < end_time:
+                if GPIO.input(IR_LARGE_PIN) == SENSOR_ACTIVE:
+                    detected_size = 'LARGE'
+                elif GPIO.input(IR_MEDIUM_PIN) == SENSOR_ACTIVE and detected_size != 'LARGE':
+                    detected_size = 'MEDIUM'
+                time.sleep(0.01)
+
+            print(f'📏 Size scan complete → Detected: {detected_size}')
+            if detected_size == 'SMALL':
+                count_small += 1
+                last_mango = {'size': 'SMALL', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                execute_small_delivery()
+            elif detected_size == 'MEDIUM':
+                count_medium += 1
+                last_mango = {'size': 'MEDIUM', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                execute_medium_delivery()
+            elif detected_size == 'LARGE':
+                count_large += 1
+                last_mango = {'size': 'LARGE', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                execute_large_delivery()
+
+            print('-' * 60)
+            print(f'📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}')
+            print('-' * 60)
 
         time.sleep(0.01)
 
