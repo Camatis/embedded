@@ -72,7 +72,7 @@ async function checkInternet() {
   }
 }
 
-const offlineQueue = [];
+let offlineQueue = [];
 let enqueueFlushHandle = null;
 
 // ===== HARDWARE CONTROL =====
