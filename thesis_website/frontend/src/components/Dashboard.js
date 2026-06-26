@@ -901,9 +901,17 @@ function Dashboard({ user, token, onLogout }) {
       if (!startResult.success) {
         console.error('Hardware start failed:', startResult);
         setHardwareAlert(`Hardware start failed: ${startResult.message}`);
+        setSessionActive(false);
+        return;
       }
 
-      await controlConveyor('start');
+      const conveyorResult = await controlConveyor('start');
+      if (!conveyorResult?.success) {
+        console.error('Conveyor start failed:', conveyorResult);
+        setHardwareAlert(`Conveyor failed to start: ${conveyorResult?.message || 'unknown error'}`);
+        setSessionActive(false);
+        return;
+      }
       fetchSessions();
     } catch (err) {
       console.error('Error starting session', err);
