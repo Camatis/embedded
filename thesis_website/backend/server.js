@@ -1242,7 +1242,7 @@ app.post('/api/hardware/pause', async (req, res) => {
 app.post('/api/hardware/continue', async (req, res) => {
   try {
     await ensureHardwareProcessRunning();
-    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'continue' }, { timeout: 5000 });
+    await axios.post(`${PYTHON_API_BASE_URL}/api/hardware/control`, { action: 'resume' }, { timeout: 5000 });
     res.json({ success: true, message: 'Hardware controller continued' });
   } catch (error) {
     console.error('Error continuing sorting:', error?.message || error);

@@ -804,8 +804,23 @@ function Dashboard({ user, token, onLogout }) {
         startAutoSave(newId);
       }
 
-      await startHardware();
-      await controlConveyor('start');
+      const startResult = await startHardware();
+      if (!startResult.success) {
+        console.error('Hardware start failed:', startResult);
+        setHardwareAlert(`Hardware start failed: ${startResult.message}`);
+        setSessionActive(false);
+        stopAutoSave();
+        return;
+      }
+
+      const conveyorResult = await controlConveyor('start');
+      if (!conveyorResult?.success) {
+        console.error('Conveyor start failed:', conveyorResult);
+        setHardwareAlert(`Conveyor failed to start: ${conveyorResult?.message || 'unknown error'}`);
+        setSessionActive(false);
+        stopAutoSave();
+        return;
+      }
 
       setSessionActive(true);
       setSessionPaused(false);

@@ -79,15 +79,18 @@ def init_yolo_model():
 
 
 def normalize_frame(frame):
+    """Convert any Picamera2 output format to BGR for OpenCV."""
     if frame is None:
         return None
     if frame.ndim == 2:
         return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     if frame.shape[2] == 4:
+        # Picamera2 XRGB8888 → treat as RGBA and convert to BGR
         return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
     if frame.shape[2] == 1:
         return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    return frame
+    # Picamera2 RGB888 (3-channel) → convert to BGR for OpenCV
+    return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
 
 def draw_bounding_boxes(frame, yolo_model, do_detect=True):
@@ -263,6 +266,7 @@ class CameraTrack(VideoStreamTrack):
             frame = 255 * np.zeros((self.height, self.width, 3), np.uint8)
         
         try:
+            # normalize_frame already produced BGR; convert to RGB for WebRTC
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
             video_frame.pts = pts
