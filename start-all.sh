@@ -1,121 +1,119 @@
-# To Run: ./start-all.sh
-# Stop: Press Ctrl+C
+#!/bin/bash
+# To Run:  cd embedded && ./start-all.sh
+# Stop:    Press Ctrl+C
 
-set -e
-echo "Starting Mango Sorter System..."
+# Always run from the embedded/ directory regardless of where script is called from
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Create control file for hardware
-mkdir -p /tmp
-echo '{"running": false}' > /tmp/mangosort_control.json
+echo ""
+echo "════════════════════════════════════════════════════"
+echo "       Mango Sorter System — Starting Up"
+echo "════════════════════════════════════════════════════"
+echo ""
 
-# for starting Backend (Node.js)
-echo "Starting Backend..."
-cd thesis_website/backend
-npm install > /dev/null 2>&1 || { echo " Backend npm install failed"; exit 1; }
-npm start > /tmp/backend.log 2>&1 &
+# ── Activate virtual environment (inherited by all background processes) ───────
+VENV_ACTIVATE="$SCRIPT_DIR/../virtual_env/myenv/bin/activate"
+if [ -f "$VENV_ACTIVATE" ]; then
+  source "$VENV_ACTIVATE"
+  echo "✓ Virtual environment activated: $VIRTUAL_ENV"
+else
+  echo "⚠  Virtual environment not found at: $VENV_ACTIVATE"
+  echo "   Python scripts may fail if packages are not installed globally."
+fi
+
+echo ""
+echo "Starting services in order..."
+echo ""
+
+# ── 1st: webrtc_stream.py  (camera + YOLO detection, port 8082) ───────────────
+echo "[1/5] webrtc_stream.py  — Camera stream + YOLO detection"
+if [ -f "$SCRIPT_DIR/webrtc_stream.py" ]; then
+  python3 "$SCRIPT_DIR/webrtc_stream.py" > /tmp/webrtc_stream.log 2>&1 &
+  WEBRTC_PID=$!
+  echo "      ✓ PID: $WEBRTC_PID  |  log: /tmp/webrtc_stream.log"
+  sleep 5   # allow camera to open and YOLO model to load
+else
+  echo "      ⚠  webrtc_stream.py not found — skipping"
+  WEBRTC_PID=""
+fi
+
+# ── 2nd: servotest.py  (hardware controller, port 5000) ───────────────────────
+echo "[2/5] servotest.py      — Hardware controller (GPIO / servos / IR)"
+if [ -f "$SCRIPT_DIR/servotest.py" ]; then
+  python3 "$SCRIPT_DIR/servotest.py" > /tmp/servotest.log 2>&1 &
+  SERVOTEST_PID=$!
+  echo "      ✓ PID: $SERVOTEST_PID  |  log: /tmp/servotest.log"
+  sleep 4   # allow GPIO + PCA9685 + Flask to initialise
+else
+  echo "      ⚠  servotest.py not found — skipping"
+  SERVOTEST_PID=""
+fi
+
+# ── 3rd: temp_monitor.py  (CPU temperature monitor) ──────────────────────────
+echo "[3/5] temp_monitor.py   — CPU temperature monitor"
+if [ -f "$SCRIPT_DIR/temp_monitor.py" ]; then
+  python3 "$SCRIPT_DIR/temp_monitor.py" > /tmp/temp_monitor.log 2>&1 &
+  TEMP_PID=$!
+  echo "      ✓ PID: $TEMP_PID  |  log: /tmp/temp_monitor.log"
+  sleep 1
+else
+  echo "      ⚠  temp_monitor.py not found (optional) — skipping"
+  TEMP_PID=""
+fi
+
+# ── 4th: Node.js backend  (Express + MongoDB, port 5001) ─────────────────────
+echo "[4/5] backend           — Node.js / Express API"
+cd "$SCRIPT_DIR/thesis_website/backend"
+npm install > /dev/null 2>&1 || true
+npm run dev > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
-echo "   ✓ Backend PID: $BACKEND_PID"
+echo "      ✓ PID: $BACKEND_PID  |  log: /tmp/backend.log"
+sleep 5   # allow Express to start and MongoDB to connect
 
-# Wait for backend to start
-sleep 4
-
-# for starting Frontend (React)
-echo "Starting Frontend..."
-cd ../frontend
-npm install > /dev/null 2>&1 || { echo " Frontend npm install failed"; exit 1; }
+# ── 5th: React frontend  (port 3000) ─────────────────────────────────────────
+echo "[5/5] frontend          — React app"
+cd "$SCRIPT_DIR/thesis_website/frontend"
+npm install > /dev/null 2>&1 || true
 GENERATE_SOURCEMAP=false npm start > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
-echo "   ✓ Frontend PID: $FRONTEND_PID"
+echo "      ✓ PID: $FRONTEND_PID  |  log: /tmp/frontend.log"
 
-# Wait for frontend to start
-sleep 5
-
-# Return to embedded directory
-cd ../..
-
-# Activate virtual environment (located at ~/virtual_env/myenv)
-if [ -f ../virtual_env/myenv/bin/activate ]; then
-  source ../virtual_env/myenv/bin/activate
-else
-  echo "   ⚠ Virtual environment not found at ../virtual_env/myenv"
-fi
-
-# for starting Servotest (Hardware Controller) - CRITICAL
-echo "Starting Servotest Hardware Controller..."
-if [ -f servotest.py ]; then
-  python3 servotest.py > /tmp/servotest.log 2>&1 &
-  SERVOTEST_PID=$!
-  echo "   ✓ Servotest PID: $SERVOTEST_PID"
-else
-  echo "   ⚠ servotest.py not found"
-fi
-
-# Wait for servotest to initialize
-sleep 3
-
-# for starting Temperature Monitor
-echo "Starting Temperature Monitor..."
-if [ -f temp_monitor.py ]; then
-  python3 temp_monitor.py > /tmp/temp_monitor.log 2>&1 &
-  TEMP_MONITOR_PID=$!
-  echo "   ✓ Temp Monitor PID: $TEMP_MONITOR_PID"
-else
-  echo "   ⚠ temp_monitor.py not found (optional)"
-fi
-
-# for starting Camera Stream (MJPEG)
-echo "Starting Camera Stream..."
-if [ -f cam_stream.py ]; then
-  python3 cam_stream.py > /tmp/cam_stream.log 2>&1 &
-  CAM_STREAM_PID=$!
-  echo "   ✓ Cam Stream PID: $CAM_STREAM_PID"
-else
-  echo "   ⚠ cam_stream.py not found (optional)"
-fi
-
+cd "$SCRIPT_DIR"
 
 echo ""
 echo "════════════════════════════════════════════════════"
-echo "✓ All services started successfully!"
+echo "✓  All services started!"
 echo "════════════════════════════════════════════════════"
 echo ""
-echo "Access the system:"
-echo "   🌐 Frontend:  http://raspberrypi.local:3000"
-echo "   🔧 Backend API:  http://localhost:5001"
-echo "   📷 MJPEG Stream:  http://localhost:8081/mjpeg"
-echo "   🤖 Hardware API:  http://localhost:5000"
+echo "  Access the system:"
+echo "    🌐  Frontend (UI)     →  http://raspberrypi.local:3000"
+echo "    🔧  Backend API       →  http://localhost:5001"
+echo "    📡  WebRTC / YOLO     →  http://localhost:8082"
+echo "    🤖  Hardware API      →  http://localhost:5000"
 echo ""
-echo "Monitor logs in real-time:"
-echo "   tail -f /tmp/backend.log"
-echo "   tail -f /tmp/frontend.log"
-echo "   tail -f /tmp/temp_monitor.log"
-echo "   tail -f /tmp/cam_stream.log"
+echo "  Live logs:"
+echo "    tail -f /tmp/webrtc_stream.log"
+echo "    tail -f /tmp/servotest.log"
+echo "    tail -f /tmp/temp_monitor.log"
+echo "    tail -f /tmp/backend.log"
+echo "    tail -f /tmp/frontend.log"
 echo ""
-echo "Camera troubleshooting:"
-echo "   • Check if camera enabled: raspi-config → Interface → Camera"
-echo "   • Test OpenCV: python3 -c \"import cv2; cap = cv2.VideoCapture(0); print('OK' if cap.isOpened() else 'FAIL')\""
-echo "   • View MJPEG stream: curl http://localhost:8081/mjpeg"
-echo "   • View camera logs: tail -f /tmp/cam_stream.log"
-echo ""
-echo "Servotest troubleshooting:"
-echo "   • Check hardware status: curl http://localhost:5001/api/hardware/status"
-echo "   • Test control API: curl -X POST http://localhost:5001/api/hardware/start -H 'Content-Type: application/json'"
-echo "   • View servotest logs: tail -f /tmp/servotest.log"
-echo "   • Check GPIO pins: gpio readall (pins 17,27,22 for IR sensors)"
-echo "   • Test YOLO model: python3 -c \"from ultralytics import YOLO; model = YOLO('final_weights.pt'); print('YOLO OK')\""
-echo ""
-echo "Dashboard Features:"
-echo "   • Click 'Start New Batch' to begin (spawns servotest.py)"
-echo "   • Click 'Pause Batch' to pause (hardware stops)"
-echo "   • Click 'Continue Batch' to resume (hardware restarts)"
-echo "   • Click 'Stop Batch' to finish (hardware stops)"
-echo ""
-echo "Press Ctrl+C to stop all services..."
+echo "  Press Ctrl+C to stop everything."
 echo "════════════════════════════════════════════════════"
 echo ""
 
-# Kill all services using Ctrl+C
-trap "echo ''; echo 'Shutting down all services...'; kill $BACKEND_PID $FRONTEND_PID $SERVOTEST_PID $TEMP_MONITOR_PID $CAM_STREAM_PID 2>/dev/null; echo 'All services stopped.'; exit 0" INT
+# ── Graceful shutdown when Ctrl+C is pressed ──────────────────────────────────
+trap '
+  echo ""
+  echo "Shutting down all services..."
+  [ -n "$FRONTEND_PID" ]  && kill "$FRONTEND_PID"  2>/dev/null
+  [ -n "$BACKEND_PID" ]   && kill "$BACKEND_PID"   2>/dev/null
+  [ -n "$TEMP_PID" ]      && kill "$TEMP_PID"      2>/dev/null
+  [ -n "$SERVOTEST_PID" ] && kill "$SERVOTEST_PID" 2>/dev/null
+  [ -n "$WEBRTC_PID" ]    && kill "$WEBRTC_PID"    2>/dev/null
+  echo "All services stopped."
+  exit 0
+' INT TERM
 
 wait
-
