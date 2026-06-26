@@ -241,23 +241,24 @@ def set_conveyor_speed(target_speed, reverse=False):
                 current_conveyor_speed = 0
             GPIO.output(R_EN, GPIO.HIGH)
             GPIO.output(L_EN, GPIO.HIGH)
-            # Gradual ramp for reverse
-            speed = current_reverse_speed
-            while speed != target_speed:
-                speed = min(speed + CONVEYOR_RAMP_STEP, target_speed) if target_speed > speed \
-                    else max(speed - CONVEYOR_RAMP_STEP, target_speed)
-                conveyor_pwm_reverse.ChangeDutyCycle(speed)
-                time.sleep(CONVEYOR_RAMP_DELAY)
-            current_reverse_speed = target_speed
-            conveyor_state = 'reversing' if target_speed > 0 else 'stopped'
-        else:
-            # Ramp down reverse PWM first
-            if current_reverse_speed > 0:
+            if target_speed == 0:
+                # Sudden stop for reverse — no gradual ramp-down
+                conveyor_pwm_reverse.ChangeDutyCycle(0)
+                current_reverse_speed = 0
+            else:
+                # Gradual ramp up when starting reverse
                 speed = current_reverse_speed
-                while speed > 0:
-                    speed = max(speed - CONVEYOR_RAMP_STEP, 0)
+                while speed != target_speed:
+                    speed = min(speed + CONVEYOR_RAMP_STEP, target_speed) if target_speed > speed \
+                        else max(speed - CONVEYOR_RAMP_STEP, target_speed)
                     conveyor_pwm_reverse.ChangeDutyCycle(speed)
                     time.sleep(CONVEYOR_RAMP_DELAY)
+                current_reverse_speed = target_speed
+            conveyor_state = 'reversing' if target_speed > 0 else 'stopped'
+        else:
+            # Sudden stop for reverse PWM — no gradual ramp-down
+            if current_reverse_speed > 0:
+                conveyor_pwm_reverse.ChangeDutyCycle(0)
                 current_reverse_speed = 0
             GPIO.output(R_EN, GPIO.HIGH)
             GPIO.output(L_EN, GPIO.HIGH)
@@ -491,6 +492,11 @@ def autonomous_sorting_loop():
                     last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
                     set_led("READY")
                     execute_defective_delivery()
+                    print('⏳ Waiting for mango to clear trigger sensor...')
+                    while sorting_active and GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
+                        time.sleep(0.05)
+                    time.sleep(0.2)
+                    print('✅ Chamber clear. Ready for next mango.')
                     continue
 
                 if is_not_carabao:
@@ -517,6 +523,11 @@ def autonomous_sorting_loop():
                     last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
                     set_led("READY")
                     execute_defective_delivery()
+                    print('⏳ Waiting for mango to clear trigger sensor...')
+                    while sorting_active and GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
+                        time.sleep(0.05)
+                    time.sleep(0.2)
+                    print('✅ Chamber clear. Ready for next mango.')
                     continue
 
                 count_total += 1
