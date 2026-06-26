@@ -490,7 +490,6 @@ def autonomous_sorting_loop():
                     count_defective += 1
                     count_total += 1
                     last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                    set_led("READY")
                     execute_defective_delivery()
                     print('⏳ Waiting for mango to clear trigger sensor...')
                     while sorting_active and GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
@@ -521,7 +520,6 @@ def autonomous_sorting_loop():
                     count_defective += 1
                     count_total += 1
                     last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                    set_led("READY")
                     execute_defective_delivery()
                     print('⏳ Waiting for mango to clear trigger sensor...')
                     while sorting_active and GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
