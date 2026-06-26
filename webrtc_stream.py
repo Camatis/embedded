@@ -100,14 +100,16 @@ def init_camera():
 
 def get_color_and_status(cls_name):
     cn = str(cls_name).strip().lower()
-    is_defective = any(k in cn for k in ['defect', 'bad', 'damaged', 'rotten'])
-    is_carabao = 'carabao' in cn
+    # 'not' guard prevents "not_defective" from matching as defective
+    is_defective = 'not' not in cn and any(k in cn for k in ['defect', 'bad', 'damaged', 'rotten'])
+    # 'not' guard prevents "not_carabao" substring from matching as carabao
+    is_carabao = 'carabao' in cn and 'not' not in cn
 
     if is_defective:
-        return (0, 0, 255), True, False
+        return (0, 0, 255), True, False    # Red (BGR) — defective
     elif not is_carabao:
-        return (0, 255, 255), False, True
-    return (0, 255, 0), False, False
+        return (0, 255, 255), False, True  # Yellow (BGR) — not carabao mango
+    return (0, 255, 0), False, False       # Green (BGR) — not defective
 
 
 def run_detection(frame):
@@ -131,9 +133,15 @@ def run_detection(frame):
 
 def draw_detection_boxes(frame, boxes):
     for x1, y1, x2, y2, conf, cls_name in boxes:
-        color, _, _ = get_color_and_status(cls_name)
+        color, is_defective, is_not_carabao = get_color_and_status(cls_name)
+        if is_defective:
+            label = f"DEFECTIVE {conf:.2f}"
+        elif is_not_carabao:
+            label = f"NOT CARABAO {conf:.2f}"
+        else:
+            label = f"NOT DEFECTIVE {conf:.2f}"
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, f"{cls_name} {conf:.2f}", (x1, max(15, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.putText(frame, label, (x1, max(15, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return frame
 
 

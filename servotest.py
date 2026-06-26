@@ -367,17 +367,24 @@ def scan_for_mango_data():
             data = response.json()
             dets = data.get('detections', [])
             if not dets:
-                return False, False, True  # nothing detected
-            is_defective = any('defect' in str(d.get('class', '')).lower() for d in dets)
-            is_not_carabao = any(
-                'not' in str(d.get('class', '')).lower() or
-                'carabao' not in str(d.get('class', '')).lower()
+                return False, False, True
+            is_defective = any(
+                'not' not in str(d.get('class', '')).lower() and
+                any(k in str(d.get('class', '')).lower() for k in ['defect', 'bad', 'damaged', 'rotten'])
+                for d in dets
+            )
+            # Only flag not-carabao when mango is not defective; a defective mango
+            # routes to the defective bin regardless of variety.
+            # is_not_carabao = True when NO detection contains 'carabao' (excluding 'not_carabao' patterns)
+            is_not_carabao = not is_defective and not any(
+                'carabao' in str(d.get('class', '')).lower() and
+                'not' not in str(d.get('class', '')).lower()
                 for d in dets
             )
             return is_defective, is_not_carabao, False
     except Exception:
         pass
-    return False, False, True  # treat errors as no detection
+    return False, False, True
 
 def autonomous_sorting_loop():
     global sorting_active, sorting_paused, batch_state, conveyor_state, count_small, count_medium, count_large, count_defective, count_total, last_mango, multi_detection_flag
@@ -446,7 +453,7 @@ def autonomous_sorting_loop():
                 # Re-scan the current mango
                 is_defective, is_not_carabao, no_detection = scan_for_mango_data()
 
-            # Task 7: nothing detected at all — reverse to entrance
+            # No detection → reverse to entrance
             if no_detection:
                 trigger_buzzer()
                 print('🚨 No mango detected — reversing to entrance.')
@@ -457,7 +464,19 @@ def autonomous_sorting_loop():
                 set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
-            # Task 8: not a Carabao Mango — reverse to entrance
+            # Defective (checked before not-carabao so defective mangoes always hit defective bin)
+            if is_defective:
+                trigger_buzzer()
+                print('🚨 DEFECTIVE on first side → defective route.')
+                count_defective += 1
+                count_total += 1
+                last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                set_led("READY")
+                execute_defective_delivery()
+                set_conveyor_speed(CONVEYOR_SPEED)
+                continue
+
+            # Not a Carabao Mango → reverse to entrance
             if is_not_carabao:
                 trigger_buzzer()
                 print('🚨 Not Carabao Mango — reversing to entrance.')
@@ -468,22 +487,27 @@ def autonomous_sorting_loop():
                 set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
-            if is_defective:
+            # FLIP — run belt briefly to expose the other side for second scan
+            print('✅ GOOD on first side → Flipping for second scan...')
+            set_conveyor_speed(CONVEYOR_SPEED)
+            time.sleep(0.2)
+            set_conveyor_speed(0)
+
+            # SECOND SCAN
+            is_defective_2, _, no_detection_2 = scan_for_mango_data()
+
+            if is_defective_2:
                 trigger_buzzer()
+                print('🚨 DEFECTIVE on second side → defective route.')
                 count_defective += 1
                 count_total += 1
-                last_mango = {
-                    'size': 'defective',
-                    'health': 'DEFECTIVE',
-                    'timestamp': datetime.now().isoformat(),
-                    'distance': None
-                }
+                last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
                 set_led("READY")
                 execute_defective_delivery()
                 set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
-            # Size sorting: run belt through IR size sensors
+            # SIZE SORTING: run belt through IR size sensors
             count_total += 1
             print(f'▶️  STARTING BELT FOR SIZE DETECTION ({SIZE_SCAN_DURATION} seconds)...')
             set_conveyor_speed(CONVEYOR_SPEED)
