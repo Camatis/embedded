@@ -45,6 +45,24 @@ gate_states = {
 multi_detection_flag = False
 multi_detection_lock = threading.Lock()
 
+# Alert message for UI pop-up notifications
+hardware_alert = ''
+hardware_alert_lock = threading.Lock()
+
+def set_hardware_alert(msg):
+    global hardware_alert
+    with hardware_alert_lock:
+        hardware_alert = msg
+
+def get_hardware_alert():
+    with hardware_alert_lock:
+        return hardware_alert
+
+def clear_hardware_alert():
+    global hardware_alert
+    with hardware_alert_lock:
+        hardware_alert = ''
+
 # ==========================================
 # GRACEFUL SHUTDOWN SETUP
 # ==========================================
@@ -107,9 +125,10 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
 # --- Sensors & GPIO ---
-IR_TRIGGER_PIN = 17 
-IR_MEDIUM_PIN = 27  
-IR_LARGE_PIN = 22    
+IR_TRIGGER_PIN = 17
+IR_MEDIUM_PIN = 27
+IR_LARGE_PIN = 22
+IR_ENTRANCE_PIN = 23  # Break beam before scanning chamber (task 3)
 
 # --- LEDs & Buzzer ---
 GREEN_LED = 5
@@ -119,6 +138,7 @@ BUZZER = 24 # Buzzer updated to GPIO 24
 GPIO.setup(IR_TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(IR_MEDIUM_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(IR_LARGE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(IR_ENTRANCE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(GREEN_LED, GPIO.OUT)
 GPIO.setup(RED_LED, GPIO.OUT)
 GPIO.setup(BUZZER, GPIO.OUT)
@@ -135,6 +155,36 @@ def trigger_buzzer(duration=0.5):
     GPIO.output(BUZZER, GPIO.HIGH)
     time.sleep(duration)
     GPIO.output(BUZZER, GPIO.LOW)
+
+def reverse_until_entrance(timeout=15.0):
+    """Reverse conveyor until mango reaches the entrance sensor, then stop."""
+    set_conveyor_speed(CONVEYOR_SPEED, reverse=True)
+    deadline = time.time() + timeout
+    while sorting_active and time.time() < deadline:
+        if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+            break
+        time.sleep(0.05)
+    set_conveyor_speed(0)
+    print('✅ Mango reached entrance sensor, conveyor stopped.')
+
+def wait_for_entrance_clear(timeout=60.0):
+    """Block until the entrance sensor no longer detects an object."""
+    deadline = time.time() + timeout
+    while sorting_active and time.time() < deadline:
+        if GPIO.input(IR_ENTRANCE_PIN) == GPIO.HIGH:
+            break
+        time.sleep(0.1)
+    print('✅ Entrance clear, ready to resume.')
+
+def check_multi_detection():
+    """Query webrtc_stream.py to see if more than one mango is visible."""
+    try:
+        response = requests.get('http://127.0.0.1:8082/detection', timeout=1)
+        if response.status_code == 200:
+            return response.json().get('multi_detection', False)
+    except Exception:
+        pass
+    return False
 
 # --- DC Motor Setup ---
 RPWM = 12
@@ -215,17 +265,25 @@ initial_startup_drop()
 # 5. MAIN AUTONOMOUS SENSOR LOOP
 # ==========================================
 def scan_for_mango_data():
-    time.sleep(4.0) 
+    """Wait for YOLO scan and return (is_defective, is_not_carabao, no_detection)."""
+    time.sleep(4.0)
     try:
         response = requests.get('http://127.0.0.1:8082/detection', timeout=2)
         if response.status_code == 200:
             data = response.json()
             dets = data.get('detections', [])
-            is_defective = any('defect' in str(d.get('class','')).lower() for d in dets)
-            is_not_carabao = any('not' in str(d.get('class','')).lower() or 'carabao' not in str(d.get('class','')).lower() for d in dets)
-            return is_defective, is_not_carabao
-    except: pass
-    return False, False
+            if not dets:
+                return False, False, True  # nothing detected
+            is_defective = any('defect' in str(d.get('class', '')).lower() for d in dets)
+            is_not_carabao = any(
+                'not' in str(d.get('class', '')).lower() or
+                'carabao' not in str(d.get('class', '')).lower()
+                for d in dets
+            )
+            return is_defective, is_not_carabao, False
+    except Exception:
+        pass
+    return False, False, True  # treat errors as no detection
 
 def autonomous_sorting_loop():
     global sorting_active, sorting_paused, batch_state, conveyor_state, count_small, count_medium, count_large, count_defective, count_total, last_mango, multi_detection_flag
@@ -234,21 +292,82 @@ def autonomous_sorting_loop():
             set_led("OFF")
             time.sleep(0.5)
             continue
-        
+
+        # Task 3: don't run if entrance sensor is still blocked (wait until clear)
+        if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+            time.sleep(0.1)
+            continue
+
         set_led("READY")
 
         if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
             set_led("BUSY")
             set_conveyor_speed(0)
-            
-            is_defective, is_not_carabao = scan_for_mango_data()
-            
+
+            # Task 2: check for two or more mangoes before starting scan
+            if check_multi_detection():
+                trigger_buzzer()
+                print('🚨 Multiple mangoes detected!')
+                with multi_detection_lock:
+                    multi_detection_flag = True
+                set_hardware_alert('TWO_MANGOES')
+                reverse_until_entrance()
+                wait_for_entrance_clear()
+                clear_hardware_alert()
+                with multi_detection_lock:
+                    multi_detection_flag = False
+                set_conveyor_speed(CONVEYOR_SPEED)
+                continue
+
+            # Task 3: monitor entrance sensor while scan is running in background
+            entrance_blocked_during_scan = threading.Event()
+            scan_abort = threading.Event()
+
+            def _watch_entrance():
+                while not scan_abort.is_set():
+                    if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+                        entrance_blocked_during_scan.set()
+                        return
+                    time.sleep(0.05)
+
+            watcher = threading.Thread(target=_watch_entrance, daemon=True)
+            watcher.start()
+
+            is_defective, is_not_carabao, no_detection = scan_for_mango_data()
+            scan_abort.set()
+
+            # Task 3: handle entrance trigger during scan
+            if entrance_blocked_during_scan.is_set():
+                trigger_buzzer()
+                print('🚨 Object detected at entrance during scan!')
+                set_hardware_alert('ENTRANCE_DURING_SCAN')
+                wait_for_entrance_clear()
+                clear_hardware_alert()
+                # Re-scan the current mango
+                is_defective, is_not_carabao, no_detection = scan_for_mango_data()
+
+            # Task 7: nothing detected at all — reverse to entrance
+            if no_detection:
+                trigger_buzzer()
+                print('🚨 No mango detected — reversing to entrance.')
+                set_hardware_alert('NO_DETECTION')
+                reverse_until_entrance()
+                wait_for_entrance_clear()
+                clear_hardware_alert()
+                set_conveyor_speed(CONVEYOR_SPEED)
+                continue
+
+            # Task 8: not a Carabao Mango — reverse to entrance
             if is_not_carabao:
                 trigger_buzzer()
-                print("🚨 Not Carabao Mango!")
-                reverse_conveyor_timed(1.5)
+                print('🚨 Not Carabao Mango — reversing to entrance.')
+                set_hardware_alert('NOT_CARABAO')
+                reverse_until_entrance()
+                wait_for_entrance_clear()
+                clear_hardware_alert()
+                set_conveyor_speed(CONVEYOR_SPEED)
                 continue
-                
+
             if is_defective:
                 trigger_buzzer()
                 count_defective += 1
@@ -259,6 +378,8 @@ def autonomous_sorting_loop():
                     'timestamp': datetime.now().isoformat(),
                     'distance': None
                 }
+                set_led("READY")
+                set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
             # [.. Size sorting logic ..]
@@ -267,6 +388,8 @@ def autonomous_sorting_loop():
 
 @app.route('/api/hardware/status', methods=['GET'])
 def get_hardware_status():
+    with multi_detection_lock:
+        two_mangoes = multi_detection_flag
     return jsonify({
         'counts': {
             'small': count_small,
@@ -278,12 +401,16 @@ def get_hardware_status():
         'sensors': {
             'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
             'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
-            'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW
+            'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW,
+            'entrance': GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW
         },
         'state': 'running' if sorting_active else ('paused' if sorting_paused else 'idle'),
         'batch_state': batch_state,
         'conveyor_state': conveyor_state,
-        'last_mango': last_mango
+        'last_mango': last_mango,
+        'alertMessage': get_hardware_alert(),
+        'twoMangoes': two_mangoes,
+        'entranceBlocked': GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW
     })
 
 @app.route('/api/hardware/control', methods=['POST'])
@@ -319,6 +446,14 @@ def hardware_control():
         batch_state = 'stopped'
         conveyor_state = 'stopped'
         set_conveyor_speed(0)
+        # Task 6: reset all servo gates and barrier to default positions
+        try:
+            barrier_gate.angle = BARRIER_LOCKED
+            small_gate.angle = GATE_CLOSED
+            medium_gate.angle = GATE_CLOSED
+            large_gate.angle = GATE_CLOSED
+        except Exception as e:
+            print(f'⚠️ Error resetting gates on stop: {e}')
         return jsonify({'success': True, 'message': 'Sorting stopped'})
 
     return jsonify({'success': False, 'message': 'Invalid action'}), 400
@@ -359,23 +494,27 @@ def reset_counts():
 
 @app.route('/api/hardware/detection', methods=['GET'])
 def get_detection_status():
-    global multi_detection_flag
     with multi_detection_lock:
         flag = multi_detection_flag
-        multi_detection_flag = False
+    # Flag is cleared by the hardware loop when the condition is resolved,
+    # so UI can keep reading it until the situation is handled.
     return jsonify({'multi_detection': flag})
 
 @app.route('/api/hardware/sensors', methods=['GET'])
 def get_sensor_diagnostics():
+    with multi_detection_lock:
+        two_mangoes = multi_detection_flag
+    alert = get_hardware_alert()
     return jsonify({
         'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
         'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
         'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW,
+        'entrance': GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW,
         'defective': count_defective > 0,
         'detectedSize': last_mango.get('size'),
-        'buzzerTriggered': False,
-        'alertMessage': '',
-        'twoMangoes': False
+        'buzzerTriggered': alert != '',
+        'alertMessage': alert,
+        'twoMangoes': two_mangoes
     })
 
 # Service threads

@@ -64,6 +64,8 @@ function Dashboard({ user, token, onLogout }) {
   const [limitAlert, setLimitAlert] = useState('');
   const [showLimitAlert, setShowLimitAlert] = useState(false);
   const [showTwoMangoesPopup, setShowTwoMangoesPopup] = useState(false);
+  const [showRejectionPopup, setShowRejectionPopup] = useState(false);
+  const [rejectionMessage, setRejectionMessage] = useState({ title: '', body: '' });
   
   // Gate state tracking
   const [gateStates, setGateStates] = useState({
@@ -458,7 +460,40 @@ function Dashboard({ user, token, onLogout }) {
           detectedSize: data.detectedSize
         };
 
-        if (mounted) handleSensorData(normalized);
+        if (mounted) {
+          handleSensorData(normalized);
+
+          // Task 2: two mangoes — auto show/hide as hardware resolves it
+          setShowTwoMangoesPopup(!!data.twoMangoes);
+
+          // Tasks 3, 7, 8: rejection pop-ups driven by hardware alert state
+          const REJECTION_MESSAGES = {
+            TWO_MANGOES: {
+              title: '⚠️ Multiple Mangoes Detected',
+              body: 'More than one mango detected on the conveyor. Reversing belt to entrance. Please remove the extra mango.'
+            },
+            NO_DETECTION: {
+              title: '⚠️ No Mango Detected',
+              body: 'No mango was found in the scanning chamber. Reversing belt to entrance. Please check the scanner area.'
+            },
+            NOT_CARABAO: {
+              title: '⚠️ Not a Carabao Mango',
+              body: 'A non-Carabao Mango was detected. Reversing belt to entrance. Please remove the rejected mango from the tray.'
+            },
+            ENTRANCE_DURING_SCAN: {
+              title: '⚠️ Object Detected at Entry',
+              body: 'An object was detected at the entrance while a scan was ongoing. Conveyor stopped. Please remove the object from the entry. The current mango will be re-scanned.'
+            }
+          };
+
+          const alert = data.alertMessage || '';
+          if (alert && REJECTION_MESSAGES[alert]) {
+            setRejectionMessage(REJECTION_MESSAGES[alert]);
+            setShowRejectionPopup(true);
+          } else {
+            setShowRejectionPopup(false);
+          }
+        }
       } catch (err) {
         console.error('Error polling sensor data:', err);
       }
@@ -562,31 +597,7 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, []);
 
-  // Poll detection status for multi-mango alerts
-  useEffect(() => {
-    let mounted = true;
-    const pollDetectionStatus = async () => {
-      try {
-        const apiUrl = `${BACKEND_URL}/api/hardware/detection`;
-        const res = await fetch(apiUrl);
-        if (res.ok) {
-          const data = await res.json();
-          if (mounted && data.multi_detection === true) {
-            setShowTwoMangoesPopup(true);
-            console.log('🥭🥭 Multiple mangoes detected!');
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching detection status', err);
-      }
-    };
-    
-    const intervalId = setInterval(pollDetectionStatus, 500);
-    return () => {
-      mounted = false;
-      clearInterval(intervalId);
-    };
-  }, []);
+  // Detection status is now handled inside the main sensor poll above.
 
   const clearSessions = async () => {
     try {
@@ -970,11 +981,21 @@ function Dashboard({ user, token, onLogout }) {
         </div>
       )}
       {showTwoMangoesPopup && (
-        <div className="tutorial-overlay" onClick={() => setShowTwoMangoesPopup(false)}>
+        <div className="tutorial-overlay">
           <div className="tutorial-box">
-            <div className="tutorial-close" onClick={() => setShowTwoMangoesPopup(false)}>✕</div>
             <h3 style={{ color: 'orange' }}>⚠️ More than one mango detected</h3>
-            <p>Multiple mangoes were detected on the conveyor. Please inspect the system.</p>
+            <p>Multiple mangoes were detected on the conveyor. The belt is reversing to the entrance. Please remove the extra mango.</p>
+            <p style={{ fontSize: '0.82em', color: '#888', marginTop: 8 }}>This window will close automatically once the belt is clear.</p>
+          </div>
+        </div>
+      )}
+      {showRejectionPopup && (
+        <div className="tutorial-overlay">
+          <div className="tutorial-box">
+            <div className="tutorial-close" onClick={() => setShowRejectionPopup(false)}>✕</div>
+            <h3 style={{ color: 'orange' }}>{rejectionMessage.title}</h3>
+            <p>{rejectionMessage.body}</p>
+            <p style={{ fontSize: '0.82em', color: '#888', marginTop: 8 }}>This window will close automatically once the belt is clear.</p>
           </div>
         </div>
       )}
@@ -1154,7 +1175,9 @@ function Dashboard({ user, token, onLogout }) {
               <h2>Sorting History (Sessions)</h2>
               <div>
                 <button onClick={exportSortingHistory} style={{ padding: '10px 20px', backgroundColor: '#1976d2', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', marginRight: '8px' }}>Export</button>
-                <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+                {user?.role === 'admin' && (
+                  <button onClick={clearSessions} style={{ padding: '10px 20px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>Clear</button>
+                )}
               </div>
             </div>
             <div className="history-table-container">

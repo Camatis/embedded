@@ -1023,26 +1023,30 @@ app.get('/api/hardware/sensors', async (req, res) => {
         const trigger = data.sensors?.trigger ?? false;
         const medium = data.sensors?.medium ?? false;
         const large = data.sensors?.large ?? false;
+        const entrance = data.sensors?.entrance ?? false;
         const defective = data.last_mango?.health === 'DEFECTIVE';
         const buzzerTriggered = data.buzzerTriggered ?? defective ?? false;
         const alertMessage = data.alertMessage || '';
         const twoMangoes = data.twoMangoes ?? false;
+        const entranceBlocked = data.entranceBlocked ?? entrance;
 
         res.json({
             small: trigger,
             trigger,
             medium,
             large,
+            entrance,
             defective,
             detectedSize: data.last_mango?.size ?? null,
             lastMango: data.last_mango || null,
             buzzerTriggered,
             alertMessage,
             twoMangoes,
+            entranceBlocked,
             timestamp: Date.now(),
             online: true,
             state: data.state || 'unknown',
-            counts: suppress ? {} : (data.counts || {})  // Suppress stale counts during grace period
+            counts: suppress ? {} : (data.counts || {})
         });
     } catch (error) {
       console.error('Error getting sensor data:', error?.message || error);
@@ -1052,12 +1056,14 @@ app.get('/api/hardware/sensors', async (req, res) => {
         trigger: false,
         medium: false,
         large: false,
+        entrance: false,
         defective: false,
         detectedSize: null,
         lastMango: null,
         buzzerTriggered: false,
         alertMessage: '',
         twoMangoes: false,
+        entranceBlocked: false,
         timestamp: Date.now(),
         online: false,
         offline: true,
