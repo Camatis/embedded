@@ -130,6 +130,10 @@ IR_MEDIUM_PIN = 27
 IR_LARGE_PIN = 22
 IR_ENTRANCE_PIN = 23  # Break beam before scanning chamber (task 3)
 
+# Sensor active level — set to GPIO.LOW for proximity/reflective sensors (output LOW when object near)
+# Set to GPIO.HIGH for break-beam sensors (output HIGH when beam is broken by an object)
+SENSOR_ACTIVE = GPIO.LOW
+
 # --- LEDs & Buzzer ---
 GREEN_LED = 5
 RED_LED = 6
@@ -161,7 +165,7 @@ def reverse_until_entrance(timeout=15.0):
     set_conveyor_speed(CONVEYOR_SPEED, reverse=True)
     deadline = time.time() + timeout
     while sorting_active and time.time() < deadline:
-        if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+        if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
             break
         time.sleep(0.05)
     set_conveyor_speed(0)
@@ -171,7 +175,7 @@ def wait_for_entrance_clear(timeout=60.0):
     """Block until the entrance sensor no longer detects an object."""
     deadline = time.time() + timeout
     while sorting_active and time.time() < deadline:
-        if GPIO.input(IR_ENTRANCE_PIN) == GPIO.HIGH:
+        if GPIO.input(IR_ENTRANCE_PIN) != SENSOR_ACTIVE:
             break
         time.sleep(0.1)
     print('✅ Entrance clear, ready to resume.')
@@ -296,16 +300,16 @@ def autonomous_sorting_loop():
             continue
 
         # Task 3: don't run if entrance sensor is still blocked (wait until clear)
-        if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+        if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
             time.sleep(0.1)
             continue
 
         set_led("READY")
         set_conveyor_speed(CONVEYOR_SPEED)  # keep belt running while waiting for mango
 
-        if GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW:
+        if GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
             time.sleep(0.03)  # 30 ms debounce — ignore brief noise spikes
-            if GPIO.input(IR_TRIGGER_PIN) != GPIO.LOW:
+            if GPIO.input(IR_TRIGGER_PIN) != SENSOR_ACTIVE:
                 time.sleep(0.01)
                 continue
             print(f'[TRIGGER] Mango at scan chamber. entrance={GPIO.input(IR_ENTRANCE_PIN)}')
@@ -333,7 +337,7 @@ def autonomous_sorting_loop():
 
             def _watch_entrance():
                 while not scan_abort.is_set():
-                    if GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW:
+                    if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
                         entrance_blocked_during_scan.set()
                         return
                     time.sleep(0.05)
@@ -407,10 +411,10 @@ def get_hardware_status():
             'total': count_total
         },
         'sensors': {
-            'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
-            'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
-            'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW,
-            'entrance': GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW
+            'trigger': GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE,
+            'medium': GPIO.input(IR_MEDIUM_PIN) == SENSOR_ACTIVE,
+            'large': GPIO.input(IR_LARGE_PIN) == SENSOR_ACTIVE,
+            'entrance': GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE
         },
         'state': 'running' if sorting_active else ('paused' if sorting_paused else 'idle'),
         'batch_state': batch_state,
@@ -418,7 +422,7 @@ def get_hardware_status():
         'last_mango': last_mango,
         'alertMessage': get_hardware_alert(),
         'twoMangoes': two_mangoes,
-        'entranceBlocked': GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW
+        'entranceBlocked': GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE
     })
 
 @app.route('/api/hardware/control', methods=['POST'])
@@ -516,10 +520,10 @@ def get_sensor_diagnostics():
         two_mangoes = multi_detection_flag
     alert = get_hardware_alert()
     return jsonify({
-        'trigger': GPIO.input(IR_TRIGGER_PIN) == GPIO.LOW,
-        'medium': GPIO.input(IR_MEDIUM_PIN) == GPIO.LOW,
-        'large': GPIO.input(IR_LARGE_PIN) == GPIO.LOW,
-        'entrance': GPIO.input(IR_ENTRANCE_PIN) == GPIO.LOW,
+        'trigger': GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE,
+        'medium': GPIO.input(IR_MEDIUM_PIN) == SENSOR_ACTIVE,
+        'large': GPIO.input(IR_LARGE_PIN) == SENSOR_ACTIVE,
+        'entrance': GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE,
         'defective': count_defective > 0,
         'detectedSize': last_mango.get('size'),
         'buzzerTriggered': alert != '',
