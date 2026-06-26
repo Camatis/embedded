@@ -341,7 +341,6 @@ def operate_hopper_cycle():
 
 def execute_defective_delivery():
     print('   🚨 EXECUTING DEFECTIVE DELIVERY ROUTE...')
-    trigger_buzzer()
     set_conveyor_speed(CONVEYOR_SPEED)
     barrier_gate.angle = BARRIER_RELEASED
     time.sleep(LARGE_DROP_TIME)
@@ -417,160 +416,149 @@ def scan_for_mango_data():
 def autonomous_sorting_loop():
     global sorting_active, sorting_paused, batch_state, conveyor_state, count_small, count_medium, count_large, count_defective, count_total, last_mango, multi_detection_flag
     while True:
-        if not sorting_active:
-            set_led("OFF")
-            time.sleep(0.5)
-            continue
-
-        # Task 3: don't run if entrance sensor is still blocked (wait until clear)
-        if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
-            time.sleep(0.1)
-            continue
-
-        set_led("READY")
-        set_conveyor_speed(CONVEYOR_SPEED)  # keep belt running while waiting for mango
-
-        if GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
-            time.sleep(0.03)  # 30 ms debounce — ignore brief noise spikes
-            if GPIO.input(IR_TRIGGER_PIN) != SENSOR_ACTIVE:
-                time.sleep(0.01)
-                continue
-            print(f'[TRIGGER] Mango at scan chamber. entrance={GPIO.input(IR_ENTRANCE_PIN)}')
-            set_led("BUSY")
-            set_conveyor_speed(0)
-
-            # Task 2: check for two or more mangoes before starting scan
-            if check_multi_detection():
-                trigger_buzzer()
-                print('🚨 Multiple mangoes detected!')
-                with multi_detection_lock:
-                    multi_detection_flag = True
-                set_hardware_alert('TWO_MANGOES')
-                reverse_until_entrance()
-                wait_for_entrance_clear()
-                clear_hardware_alert()
-                with multi_detection_lock:
-                    multi_detection_flag = False
-                set_conveyor_speed(CONVEYOR_SPEED)
+        try:
+            if not sorting_active:
+                set_led("OFF")
+                time.sleep(0.5)
                 continue
 
-            # Task 3: monitor entrance sensor while scan is running in background
-            entrance_blocked_during_scan = threading.Event()
-            scan_abort = threading.Event()
+            if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
+                time.sleep(0.1)
+                continue
 
-            def _watch_entrance():
-                while not scan_abort.is_set():
-                    if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
-                        entrance_blocked_during_scan.set()
-                        return
-                    time.sleep(0.05)
+            set_led("READY")
+            set_conveyor_speed(CONVEYOR_SPEED)
 
-            watcher = threading.Thread(target=_watch_entrance, daemon=True)
-            watcher.start()
+            if GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
+                time.sleep(0.03)  # 30 ms debounce
+                if GPIO.input(IR_TRIGGER_PIN) != SENSOR_ACTIVE:
+                    time.sleep(0.01)
+                    continue
+                print(f'[TRIGGER] Mango at scan chamber. entrance={GPIO.input(IR_ENTRANCE_PIN)}')
+                set_led("BUSY")
+                set_conveyor_speed(0)
 
-            is_defective, is_not_carabao, no_detection = scan_for_mango_data()
-            scan_abort.set()
+                if check_multi_detection():
+                    print('🚨 Multiple mangoes detected!')
+                    with multi_detection_lock:
+                        multi_detection_flag = True
+                    set_hardware_alert('TWO_MANGOES')
+                    reverse_until_entrance()
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    with multi_detection_lock:
+                        multi_detection_flag = False
+                    set_conveyor_speed(CONVEYOR_SPEED)
+                    continue
 
-            # Task 3: handle entrance trigger during scan
-            if entrance_blocked_during_scan.is_set():
-                trigger_buzzer()
-                print('🚨 Object detected at entrance during scan!')
-                set_hardware_alert('ENTRANCE_DURING_SCAN')
-                wait_for_entrance_clear()
-                clear_hardware_alert()
-                # Re-scan the current mango
+                entrance_blocked_during_scan = threading.Event()
+                scan_abort = threading.Event()
+
+                def _watch_entrance():
+                    while not scan_abort.is_set():
+                        if GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE:
+                            entrance_blocked_during_scan.set()
+                            return
+                        time.sleep(0.05)
+
+                watcher = threading.Thread(target=_watch_entrance, daemon=True)
+                watcher.start()
+
                 is_defective, is_not_carabao, no_detection = scan_for_mango_data()
+                scan_abort.set()
 
-            # No detection → reverse to entrance
-            if no_detection:
-                trigger_buzzer()
-                print('🚨 No mango detected — reversing to entrance.')
-                set_hardware_alert('NO_DETECTION')
-                reverse_until_entrance()
-                wait_for_entrance_clear()
-                clear_hardware_alert()
+                if entrance_blocked_during_scan.is_set():
+                    print('🚨 Object detected at entrance during scan!')
+                    set_hardware_alert('ENTRANCE_DURING_SCAN')
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    is_defective, is_not_carabao, no_detection = scan_for_mango_data()
+
+                if no_detection:
+                    trigger_buzzer()
+                    print('🚨 No mango detected — reversing to entrance.')
+                    set_hardware_alert('NO_DETECTION')
+                    reverse_until_entrance()
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    set_conveyor_speed(CONVEYOR_SPEED)
+                    continue
+
+                if is_defective:
+                    print('🚨 DEFECTIVE on first side → defective route.')
+                    count_defective += 1
+                    count_total += 1
+                    last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                    set_led("READY")
+                    execute_defective_delivery()
+                    continue
+
+                if is_not_carabao:
+                    trigger_buzzer()
+                    print('🚨 Not Carabao Mango — reversing to entrance.')
+                    set_hardware_alert('NOT_CARABAO')
+                    reverse_until_entrance()
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    set_conveyor_speed(CONVEYOR_SPEED)
+                    continue
+
+                print('✅ GOOD on first side → Flipping for second scan...')
                 set_conveyor_speed(CONVEYOR_SPEED)
-                continue
+                time.sleep(0.2)
+                set_conveyor_speed(0)
 
-            # Defective (checked before not-carabao so defective mangoes always hit defective bin)
-            if is_defective:
-                print('🚨 DEFECTIVE on first side → defective route.')
-                count_defective += 1
+                is_defective_2, _, no_detection_2 = scan_for_mango_data()
+
+                if is_defective_2:
+                    print('🚨 DEFECTIVE on second side → defective route.')
+                    count_defective += 1
+                    count_total += 1
+                    last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                    set_led("READY")
+                    execute_defective_delivery()
+                    continue
+
                 count_total += 1
-                last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                set_led("READY")
-                execute_defective_delivery()
-                wait_for_trigger_clear()
+                print(f'▶️  STARTING BELT FOR SIZE DETECTION ({SIZE_SCAN_DURATION} seconds)...')
                 set_conveyor_speed(CONVEYOR_SPEED)
-                continue
 
-            # Not a Carabao Mango → reverse to entrance
-            if is_not_carabao:
-                trigger_buzzer()
-                print('🚨 Not Carabao Mango — reversing to entrance.')
-                set_hardware_alert('NOT_CARABAO')
-                reverse_until_entrance()
-                wait_for_entrance_clear()
-                clear_hardware_alert()
-                set_conveyor_speed(CONVEYOR_SPEED)
-                continue
+                detected_size = 'SMALL'
+                end_time = time.time() + SIZE_SCAN_DURATION
+                while time.time() < end_time:
+                    if GPIO.input(IR_LARGE_PIN) == SENSOR_ACTIVE:
+                        detected_size = 'LARGE'
+                    elif GPIO.input(IR_MEDIUM_PIN) == SENSOR_ACTIVE and detected_size != 'LARGE':
+                        detected_size = 'MEDIUM'
+                    time.sleep(0.01)
 
-            # FLIP — run belt briefly to expose the other side for second scan
-            print('✅ GOOD on first side → Flipping for second scan...')
-            set_conveyor_speed(CONVEYOR_SPEED)
-            time.sleep(0.2)
-            set_conveyor_speed(0)
+                print(f'📏 Size scan complete → Detected: {detected_size}')
+                if detected_size == 'SMALL':
+                    count_small += 1
+                    last_mango = {'size': 'SMALL', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                    execute_small_delivery()
+                elif detected_size == 'MEDIUM':
+                    count_medium += 1
+                    last_mango = {'size': 'MEDIUM', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                    execute_medium_delivery()
+                elif detected_size == 'LARGE':
+                    count_large += 1
+                    last_mango = {'size': 'LARGE', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
+                    execute_large_delivery()
 
-            # SECOND SCAN
-            is_defective_2, _, no_detection_2 = scan_for_mango_data()
+                print('-' * 60)
+                print(f'📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}')
+                print('-' * 60)
+                print('⏳ Waiting for mango to clear trigger sensor...')
+                while sorting_active and GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
+                    time.sleep(0.05)
+                time.sleep(0.2)
+                print('✅ Chamber clear. Ready for next mango.')
 
-            if is_defective_2:
-                print('🚨 DEFECTIVE on second side → defective route.')
-                count_defective += 1
-                count_total += 1
-                last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                set_led("READY")
-                execute_defective_delivery()
-                wait_for_trigger_clear()
-                set_conveyor_speed(CONVEYOR_SPEED)
-                continue
-
-            # SIZE SORTING: run belt through IR size sensors
-            count_total += 1
-            print(f'▶️  STARTING BELT FOR SIZE DETECTION ({SIZE_SCAN_DURATION} seconds)...')
-            set_conveyor_speed(CONVEYOR_SPEED)
-
-            detected_size = 'SMALL'
-            end_time = time.time() + SIZE_SCAN_DURATION
-            while time.time() < end_time:
-                if GPIO.input(IR_LARGE_PIN) == SENSOR_ACTIVE:
-                    detected_size = 'LARGE'
-                elif GPIO.input(IR_MEDIUM_PIN) == SENSOR_ACTIVE and detected_size != 'LARGE':
-                    detected_size = 'MEDIUM'
-                time.sleep(0.01)
-
-            print(f'📏 Size scan complete → Detected: {detected_size}')
-            if detected_size == 'SMALL':
-                count_small += 1
-                last_mango = {'size': 'SMALL', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                execute_small_delivery()
-            elif detected_size == 'MEDIUM':
-                count_medium += 1
-                last_mango = {'size': 'MEDIUM', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                execute_medium_delivery()
-            elif detected_size == 'LARGE':
-                count_large += 1
-                last_mango = {'size': 'LARGE', 'health': 'GOOD', 'timestamp': datetime.now().isoformat(), 'distance': None}
-                execute_large_delivery()
-
-            print('-' * 60)
-            print(f'📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}')
-            print('-' * 60)
-            wait_for_trigger_clear()
-            set_conveyor_speed(CONVEYOR_SPEED)
-            continue
-
-        time.sleep(0.01)
+            time.sleep(0.01)
+        except Exception as e:
+            print(f'❌ ERROR in sorting loop: {e}')
+            time.sleep(1)
 
 @app.route('/api/hardware/status', methods=['GET'])
 def get_hardware_status():
