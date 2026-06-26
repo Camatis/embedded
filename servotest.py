@@ -341,6 +341,7 @@ def operate_hopper_cycle():
 
 def execute_defective_delivery():
     print('   🚨 EXECUTING DEFECTIVE DELIVERY ROUTE...')
+    trigger_buzzer()
     set_conveyor_speed(CONVEYOR_SPEED)
     barrier_gate.angle = BARRIER_RELEASED
     time.sleep(LARGE_DROP_TIME)
@@ -493,7 +494,6 @@ def autonomous_sorting_loop():
 
             # Defective (checked before not-carabao so defective mangoes always hit defective bin)
             if is_defective:
-                trigger_buzzer()
                 print('🚨 DEFECTIVE on first side → defective route.')
                 count_defective += 1
                 count_total += 1
@@ -525,7 +525,6 @@ def autonomous_sorting_loop():
             is_defective_2, _, no_detection_2 = scan_for_mango_data()
 
             if is_defective_2:
-                trigger_buzzer()
                 print('🚨 DEFECTIVE on second side → defective route.')
                 count_defective += 1
                 count_total += 1
