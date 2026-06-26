@@ -184,9 +184,9 @@ def wait_for_entrance_clear(timeout=60.0):
 def wait_for_trigger_clear(timeout=10.0):
     """Block until the trigger sensor is clear so the same mango is not counted twice."""
     deadline = time.time() + timeout
-    while GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE and time.time() < deadline:
+    while sorting_active and GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE and time.time() < deadline:
         time.sleep(0.05)
-    time.sleep(0.1)
+    time.sleep(0.2)
     print('✅ Trigger clear, chamber ready for next mango.')
 
 def check_multi_detection():
