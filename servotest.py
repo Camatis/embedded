@@ -181,6 +181,14 @@ def wait_for_entrance_clear(timeout=60.0):
         time.sleep(0.1)
     print('✅ Entrance clear, ready to resume.')
 
+def wait_for_trigger_clear(timeout=10.0):
+    """Block until the trigger sensor is clear so the same mango is not counted twice."""
+    deadline = time.time() + timeout
+    while GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE and time.time() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.1)
+    print('✅ Trigger clear, chamber ready for next mango.')
+
 def check_multi_detection():
     """Query webrtc_stream.py to see if more than one mango is visible."""
     try:
@@ -215,23 +223,42 @@ CONVEYOR_SPEED = 75
 CONVEYOR_RAMP_STEP = 5
 CONVEYOR_RAMP_DELAY = 0.05
 current_conveyor_speed = 0
+current_reverse_speed = 0
 conveyor_lock = threading.Lock()
 
 def set_conveyor_speed(target_speed, reverse=False):
-    global current_conveyor_speed, conveyor_state
+    global current_conveyor_speed, current_reverse_speed, conveyor_state
     target_speed = max(0, min(100, target_speed))
     with conveyor_lock:
         if reverse:
-            # Zero forward PWM first to prevent cross-conduction
-            conveyor_pwm.ChangeDutyCycle(0)
-            current_conveyor_speed = 0
+            # Ramp down forward PWM first to prevent cross-conduction
+            if current_conveyor_speed > 0:
+                speed = current_conveyor_speed
+                while speed > 0:
+                    speed = max(speed - CONVEYOR_RAMP_STEP, 0)
+                    conveyor_pwm.ChangeDutyCycle(speed)
+                    time.sleep(CONVEYOR_RAMP_DELAY)
+                current_conveyor_speed = 0
             GPIO.output(R_EN, GPIO.HIGH)
             GPIO.output(L_EN, GPIO.HIGH)
-            conveyor_pwm_reverse.ChangeDutyCycle(target_speed)
+            # Gradual ramp for reverse
+            speed = current_reverse_speed
+            while speed != target_speed:
+                speed = min(speed + CONVEYOR_RAMP_STEP, target_speed) if target_speed > speed \
+                    else max(speed - CONVEYOR_RAMP_STEP, target_speed)
+                conveyor_pwm_reverse.ChangeDutyCycle(speed)
+                time.sleep(CONVEYOR_RAMP_DELAY)
+            current_reverse_speed = target_speed
             conveyor_state = 'reversing' if target_speed > 0 else 'stopped'
         else:
-            # Zero reverse PWM first
-            conveyor_pwm_reverse.ChangeDutyCycle(0)
+            # Ramp down reverse PWM first
+            if current_reverse_speed > 0:
+                speed = current_reverse_speed
+                while speed > 0:
+                    speed = max(speed - CONVEYOR_RAMP_STEP, 0)
+                    conveyor_pwm_reverse.ChangeDutyCycle(speed)
+                    time.sleep(CONVEYOR_RAMP_DELAY)
+                current_reverse_speed = 0
             GPIO.output(R_EN, GPIO.HIGH)
             GPIO.output(L_EN, GPIO.HIGH)
             # Gradual ramp up or down
@@ -473,6 +500,7 @@ def autonomous_sorting_loop():
                 last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
                 set_led("READY")
                 execute_defective_delivery()
+                wait_for_trigger_clear()
                 set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
@@ -504,6 +532,7 @@ def autonomous_sorting_loop():
                 last_mango = {'size': 'defective', 'health': 'DEFECTIVE', 'timestamp': datetime.now().isoformat(), 'distance': None}
                 set_led("READY")
                 execute_defective_delivery()
+                wait_for_trigger_clear()
                 set_conveyor_speed(CONVEYOR_SPEED)
                 continue
 
@@ -538,6 +567,9 @@ def autonomous_sorting_loop():
             print('-' * 60)
             print(f'📊 LIVE COUNTS | Total: {count_total} | S: {count_small} | M: {count_medium} | L: {count_large} | Defective: {count_defective}')
             print('-' * 60)
+            wait_for_trigger_clear()
+            set_conveyor_speed(CONVEYOR_SPEED)
+            continue
 
         time.sleep(0.01)
 
