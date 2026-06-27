@@ -38,7 +38,12 @@ function Dashboard({ user, token, onLogout }) {
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [editingName, setEditingName] = useState('');
-  
+
+  // Admin: view any user's batches via a user-picker dropdown
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [selectedAdminUserId, setSelectedAdminUserId] = useState('');
+  const [adminUserSessions, setAdminUserSessions] = useState([]);
+
   const videoRef = useRef(null);
   const [cameraReloadKey, setCameraReloadKey] = useState(0);
   const pcRef = useRef(null);
@@ -550,6 +555,46 @@ function Dashboard({ user, token, onLogout }) {
     }
   }, [user]);
 
+  // Admin: load the list of users for the batch-viewer dropdown
+  const fetchAdminUsers = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminUsers(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Error fetching admin users', err);
+    }
+  };
+
+  // Admin: fetch the batches belonging to the selected user
+  const fetchAdminUserSessions = async (targetUserId) => {
+    if (!targetUserId) {
+      setAdminUserSessions([]);
+      return;
+    }
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sessions?userId=${encodeURIComponent(targetUserId)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminUserSessions(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Error fetching user sessions', err);
+    }
+  };
+
+  useEffect(() => {
+    if (user?.role === 'admin') {
+      fetchAdminUsers();
+    }
+  }, [user]);
+
   // Poll physical gate servo feedbacks
   useEffect(() => {
     let mounted = true;
@@ -999,6 +1044,9 @@ function Dashboard({ user, token, onLogout }) {
           <nav className="menu-items" aria-label="Main navigation">
             <button type="button" onClick={() => { setCurrentView('dashboard'); setCameraReloadKey(prev => prev + 1); setMenuOpen(false); }} className={`menu-item ${currentView === 'dashboard' ? 'active' : ''}`}>Dashboard</button>
             <button type="button" onClick={() => { setCurrentView('batch-history'); setMenuOpen(false); }} className={`menu-item ${currentView === 'batch-history' ? 'active' : ''}`}>Batch History</button>
+            {user?.role === 'admin' && (
+              <button type="button" onClick={() => { setCurrentView('admin-user-batches'); fetchAdminUsers(); setMenuOpen(false); }} className={`menu-item ${currentView === 'admin-user-batches' ? 'active' : ''}`}>User Batches</button>
+            )}
             <button type="button" onClick={() => { setCurrentView('hardware-status'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-status' ? 'active' : ''}`}>Hardware Status</button>
             <button type="button" onClick={() => { setCurrentView('hardware-controls'); setMenuOpen(false); }} className={`menu-item ${currentView === 'hardware-controls' ? 'active' : ''}`}>Hardware Controls</button>
             <button type="button" onClick={() => { setCurrentView('settings'); setMenuOpen(false); }} className={`menu-item ${currentView === 'settings' ? 'active' : ''}`}>Settings</button>
@@ -1147,6 +1195,51 @@ function Dashboard({ user, token, onLogout }) {
               <button type="button" className="control-button start-button" onClick={() => setPasswordMessage('Settings saved')}>Save Settings</button>
               <button type="button" className="control-button stop-button" onClick={() => { setSettings(defaultSettings); setPasswordMessage('Settings reset'); }}>Reset to Defaults</button>
             </div>
+          </div>
+        ) : currentView === 'admin-user-batches' ? (
+          <div className="batch-history-container">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2>User Batches (Admin)</h2>
+              <select
+                value={selectedAdminUserId}
+                onChange={e => { const id = e.target.value; setSelectedAdminUserId(id); fetchAdminUserSessions(id); }}
+                style={{ padding: '10px 12px', borderRadius: '6px', minWidth: '220px', fontWeight: 600 }}
+              >
+                <option value="">Select a user…</option>
+                {adminUsers.map(u => (
+                  <option key={u.userId} value={u.userId}>{u.username}</option>
+                ))}
+              </select>
+            </div>
+            {!selectedAdminUserId ? (
+              <p style={{ color: '#666' }}>Select a user from the dropdown to view their batches.</p>
+            ) : (
+              <div className="history-table-container">
+                <table className="history-table">
+                  <thead>
+                    <tr>
+                      <th>Batch</th><th>Small</th><th>Medium</th><th>Large</th><th>Defective</th><th>Total</th><th>Start Time</th><th>End Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminUserSessions && adminUserSessions.length > 0 ? adminUserSessions.map((s, idx) => (
+                      <tr key={s._id || idx}>
+                        <td>{s.session_name || `Batch ${idx + 1}`}</td>
+                        <td>{s.counts?.small ?? 0}</td>
+                        <td>{s.counts?.medium ?? 0}</td>
+                        <td>{s.counts?.large ?? 0}</td>
+                        <td>{s.counts?.defective ?? 0}</td>
+                        <td>{(s.counts?.small||0) + (s.counts?.medium||0) + (s.counts?.large||0) + (s.counts?.defective||0)}</td>
+                        <td>{s.timestamps?.start_time ? new Date(s.timestamps.start_time).toLocaleString() : '-'}</td>
+                        <td>{s.timestamps?.end_time ? new Date(s.timestamps.end_time).toLocaleString() : '-'}</td>
+                      </tr>
+                    )) : (
+                      <tr><td colSpan={8} style={{ textAlign: 'center', color: '#666' }}>No batches for this user.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         ) : (
           <div className="batch-history-container">

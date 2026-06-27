@@ -517,6 +517,46 @@ app.get('/api/auth/me', verifyToken, async (req, res) => {
   }
 });
 
+// ===== ADMIN ENDPOINTS =====
+
+// GET: List all users (admin only) — used to populate the admin "User Batches" dropdown.
+// Returns the owner id in the same form stored on sessions: Mongo _id for cloud users,
+// `offline-<username>` for shadow-only users.
+app.get('/api/admin/users', verifyToken, async (req, res) => {
+  try {
+    const { userRole } = await getRequestUserContext(req);
+    if (userRole !== 'admin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const byUsername = new Map();
+
+    // Cloud users first (preferred — their sessions are keyed by Mongo _id)
+    try {
+      const users = await User.find({}, 'username role');
+      for (const u of users) {
+        if (!u.username) continue;
+        byUsername.set(u.username, { userId: u._id.toString(), username: u.username, role: u.role || 'user' });
+      }
+    } catch (e) {
+      console.warn('Admin users (cloud) lookup failed:', e.message || e);
+    }
+
+    // Offline shadow users (only add ones not already covered by a cloud account)
+    const shadow = loadShadowUsers();
+    for (const username of Object.keys(shadow)) {
+      if (byUsername.has(username)) continue;
+      byUsername.set(username, { userId: `offline-${username}`, username, role: shadow[username]?.role || 'user' });
+    }
+
+    const list = Array.from(byUsername.values()).sort((a, b) => a.username.localeCompare(b.username));
+    return res.json(list);
+  } catch (err) {
+    console.error('Admin users error:', err.message || err);
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 // ===== SESSION/SORTING ENDPOINTS =====
 
 // GET: Fetch all sessions
@@ -538,11 +578,18 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
 
   try {
     const { userId, userRole } = await getRequestUserContext(req);
-    const query = userRole === 'admin' ? {} : { userId };
+    // Admins may scope results to a specific user via ?userId=; otherwise they see all.
+    const targetUserId = (userRole === 'admin' && req.query.userId) ? String(req.query.userId) : null;
+    const query = userRole === 'admin' ? (targetUserId ? { userId: targetUserId } : {}) : { userId };
+
+    // When an admin filters by a specific user, honor that filter on local/queued too
+    // (sessionAccessibleByUser is always true for admins, so it would not filter alone).
+    const matchesTarget = (session) =>
+      !targetUserId || normalizeSessionUserId(session.userId) === normalizeSessionUserId(targetUserId);
 
     const sessions = await Session.find(query).sort({ 'timestamps.start_time': -1 });
-    const local = loadLocalSessions().filter(session => sessionAccessibleByUser(session, userId, userRole));
-    const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole));
+    const local = loadLocalSessions().filter(session => sessionAccessibleByUser(session, userId, userRole) && matchesTarget(session));
+    const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole) && matchesTarget(session));
 
     const merged = [...local, ...queued, ...sessions];
     const deduped = [];
