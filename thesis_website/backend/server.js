@@ -482,7 +482,11 @@ const getRequestUserContext = async (req) => {
   if (req.userId === 'master-admin') {
     userRole = 'admin';
   } else if (typeof req.userId === 'string' && req.userId.startsWith('offline-')) {
-    userRole = 'user';
+    // Honor the role stored for this offline/shadow user (e.g. the master admin
+    // is seeded into the shadow store with role 'admin'); don't force 'user'.
+    const username = req.userId.replace('offline-', '');
+    const shadow = loadShadowUsers();
+    userRole = shadow[username]?.role || 'user';
   } else {
     const user = await User.findById(req.userId);
     if (user) {
@@ -504,7 +508,9 @@ app.get('/api/auth/me', verifyToken, async (req, res) => {
 
     if (typeof req.userId === 'string' && req.userId.startsWith('offline-')) {
       const username = req.userId.replace('offline-', '');
-      return res.json({ id: req.userId, username, role: 'user', offline: true });
+      const shadow = loadShadowUsers();
+      const role = shadow[username]?.role || 'user';
+      return res.json({ id: req.userId, username, role, offline: true });
     }
 
     const user = await User.findById(req.userId).select('-password');
