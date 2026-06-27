@@ -357,6 +357,8 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(400).json({ message: 'Username and password are required' });
   }
 
+  // Offline/shadow + master-admin fallback. Used ONLY when the cloud DB has no such
+  // user or is unreachable. Keeps the special admin/strongpassword offline login working.
   const checkShadowOrMaster = async () => {
     const shadowUsers = loadShadowUsers();
     const shadow = shadowUsers[username];
@@ -379,72 +381,40 @@ app.post('/api/auth/login', async (req, res) => {
     return null;
   };
 
-  // Try offline immediately so `admin/strongpassword` works without Mongo
+  // 1) Prefer MongoDB when reachable, so online users consistently get a stable _id
+  //    token and all their batches land under that single owner id.
+  try {
+    const user = await User.findOne({ username });
+    console.log('User found in cloud:', user ? 'yes' : 'no');
+
+    if (user) {
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(400).json({ message: 'Invalid username or password' });
+      }
+      // Keep the offline mirror fresh for future offline logins
+      upsertShadowUser({ username: user.username, password: user.password, role: user.role });
+      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
+      console.log('Login successful (cloud) for user:', username);
+      return res.json({
+        message: 'Login successful',
+        token,
+        user: { id: user._id, username: user.username, role: user.role }
+      });
+    }
+    // Cloud reachable but no such user → could be an offline-only account or master admin
+  } catch (err) {
+    console.warn('Login cloud path unavailable, using offline fallback:', err.message || err);
+    // Fall through to offline fallback
+  }
+
+  // 2) Fallback: offline shadow store, then master admin
   const fallbackResponse = await checkShadowOrMaster();
   if (fallbackResponse) {
     return res.json(fallbackResponse);
   }
 
-  try {
-    // Find user in cloud
-    const user = await User.findOne({ username });
-    console.log('User found:', user ? 'yes' : 'no');
-
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid username or password' });
-    }
-
-    // Compare password using bcrypt
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    console.log('Password comparison:');
-    console.log('  Received:', `"${password}"`, 'Length:', password.length);
-    console.log('  Stored hash:', `"${user.password}"`, 'Length:', user.password.length);
-    console.log('  Match:', isPasswordValid);
-
-    if (!isPasswordValid) {
-      return res.status(400).json({ message: 'Invalid username or password' });
-    }
-
-    // Mirror user to offline shadow on login success
-    upsertShadowUser({ username: user.username, password: user.password, role: user.role });
-
-    // Generate token
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
-
-    console.log('Login successful for user:', username);
-    return res.json({ 
-      message: 'Login successful',
-      token,
-      user: { id: user._id, username: user.username, role: user.role }
-    });
-  } catch (err) {
-    console.error('Login error (cloud path):', err.message || err);
-    // Offline fallback: check the shadow user file
-    const shadowUsers = loadShadowUsers();
-    const shadow = shadowUsers[username];
-
-    if (shadow) {
-      const ok = await bcrypt.compare(password, shadow.password);
-      if (ok) {
-        return res.json({
-          message: 'Login successful (offline shadow user)',
-          token: jwt.sign({ userId: `offline-${username}` }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' }),
-          user: { id: null, username, role: shadow.role || 'user' }
-        });
-      }
-    }
-
-    // Master admin fallback
-    if (username === MASTER_ADMIN_USERNAME && await bcrypt.compare(password, MASTER_ADMIN_PASSWORD_HASH)) {
-      return res.json({
-        message: 'Login successful (master admin offline)',
-        token: jwt.sign({ userId: 'master-admin' }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' }),
-        user: { id: null, username: MASTER_ADMIN_USERNAME, role: 'admin' }
-      });
-    }
-
-    res.status(500).json({ message: 'Login failed and offline fallback did not authenticate' });
-  }
+  return res.status(400).json({ message: 'Invalid username or password' });
 });
 
 // Middleware to verify token
@@ -478,13 +448,15 @@ const sessionAccessibleByUser = (session, userId, userRole) => {
 const getRequestUserContext = async (req) => {
   let userRole = 'user';
   let userId = req.userId;
+  let username = null;
 
   if (req.userId === 'master-admin') {
     userRole = 'admin';
+    username = MASTER_ADMIN_USERNAME;
   } else if (typeof req.userId === 'string' && req.userId.startsWith('offline-')) {
     // Honor the role stored for this offline/shadow user (e.g. the master admin
     // is seeded into the shadow store with role 'admin'); don't force 'user'.
-    const username = req.userId.replace('offline-', '');
+    username = req.userId.replace('offline-', '');
     const shadow = loadShadowUsers();
     userRole = shadow[username]?.role || 'user';
   } else {
@@ -492,10 +464,43 @@ const getRequestUserContext = async (req) => {
     if (user) {
       userRole = user.role || 'user';
       userId = user._id.toString();
+      username = user.username;
     }
   }
 
-  return { userId: normalizeSessionUserId(userId), userRole };
+  return { userId: normalizeSessionUserId(userId), userRole, username };
+};
+
+// All owner-id forms a username's sessions might be stored under: the cloud Mongo _id
+// (if the account exists in the DB) and the offline form `offline-<username>`. This lets
+// queries match a user's batches regardless of which login path created them.
+const resolveUserIdsForUsername = async (username) => {
+  if (!username) return [];
+  const ids = new Set([`offline-${username}`]);
+  try {
+    const u = await User.findOne({ username }, '_id');
+    if (u) ids.add(u._id.toString());
+  } catch (e) {
+    // Cloud unreachable — the offline-<username> form still covers offline batches.
+  }
+  return Array.from(ids);
+};
+
+// Decide which owner-ids a /api/sessions request should be scoped to:
+//  - admin + ?username= → every id form for that user
+//  - admin + ?userId=   → that single id (back-compat)
+//  - admin + neither    → null (no filter — all users)
+//  - normal user        → every id form for their OWN account
+const resolveSessionTargetIds = async (req, ctx) => {
+  const { userId, userRole, username } = ctx;
+  if (userRole === 'admin') {
+    if (req.query.username) return await resolveUserIdsForUsername(String(req.query.username));
+    if (req.query.userId) return [String(req.query.userId)];
+    return null;
+  }
+  const ids = await resolveUserIdsForUsername(username);
+  if (userId && !ids.includes(userId)) ids.push(userId);
+  return ids;
 };
 
 // Protected route - Get current user
@@ -526,8 +531,8 @@ app.get('/api/auth/me', verifyToken, async (req, res) => {
 // ===== ADMIN ENDPOINTS =====
 
 // GET: List all users (admin only) — used to populate the admin "User Batches" dropdown.
-// Returns the owner id in the same form stored on sessions: Mongo _id for cloud users,
-// `offline-<username>` for shadow-only users.
+// Keyed by username; the admin view then fetches /api/sessions?username=<username>, which
+// matches every owner-id form (cloud _id AND offline-<username>) for that person.
 app.get('/api/admin/users', verifyToken, async (req, res) => {
   try {
     const { userRole } = await getRequestUserContext(req);
@@ -537,22 +542,22 @@ app.get('/api/admin/users', verifyToken, async (req, res) => {
 
     const byUsername = new Map();
 
-    // Cloud users first (preferred — their sessions are keyed by Mongo _id)
+    // Cloud users
     try {
       const users = await User.find({}, 'username role');
       for (const u of users) {
         if (!u.username) continue;
-        byUsername.set(u.username, { userId: u._id.toString(), username: u.username, role: u.role || 'user' });
+        byUsername.set(u.username, { username: u.username, role: u.role || 'user' });
       }
     } catch (e) {
       console.warn('Admin users (cloud) lookup failed:', e.message || e);
     }
 
-    // Offline shadow users (only add ones not already covered by a cloud account)
+    // Offline shadow users not already covered by a cloud account
     const shadow = loadShadowUsers();
     for (const username of Object.keys(shadow)) {
       if (byUsername.has(username)) continue;
-      byUsername.set(username, { userId: `offline-${username}`, username, role: shadow[username]?.role || 'user' });
+      byUsername.set(username, { username, role: shadow[username]?.role || 'user' });
     }
 
     const list = Array.from(byUsername.values()).sort((a, b) => a.username.localeCompare(b.username));
@@ -583,19 +588,22 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
   };
 
   try {
-    const { userId, userRole } = await getRequestUserContext(req);
-    // Admins may scope results to a specific user via ?userId=; otherwise they see all.
-    const targetUserId = (userRole === 'admin' && req.query.userId) ? String(req.query.userId) : null;
-    const query = userRole === 'admin' ? (targetUserId ? { userId: targetUserId } : {}) : { userId };
-
-    // When an admin filters by a specific user, honor that filter on local/queued too
-    // (sessionAccessibleByUser is always true for admins, so it would not filter alone).
+    const ctx = await getRequestUserContext(req);
+    // Resolve the owner-ids to include. null = no filter (admin viewing everyone);
+    // otherwise an array covering every id form (cloud _id + offline-<username>) so a
+    // user's batches show regardless of which login path created them.
+    const targetUserIds = await resolveSessionTargetIds(req, ctx);
+    const targetSet = targetUserIds
+      ? new Set(targetUserIds.map(id => normalizeSessionUserId(id)))
+      : null;
     const matchesTarget = (session) =>
-      !targetUserId || normalizeSessionUserId(session.userId) === normalizeSessionUserId(targetUserId);
+      !targetSet || targetSet.has(normalizeSessionUserId(session.userId));
+
+    const query = targetUserIds ? { userId: { $in: targetUserIds } } : {};
 
     const sessions = await Session.find(query).sort({ 'timestamps.start_time': -1 });
-    const local = loadLocalSessions().filter(session => sessionAccessibleByUser(session, userId, userRole) && matchesTarget(session));
-    const queued = offlineQueue.map(q => ({ ...q })).filter(session => sessionAccessibleByUser(session, userId, userRole) && matchesTarget(session));
+    const local = loadLocalSessions().filter(matchesTarget);
+    const queued = offlineQueue.map(q => ({ ...q })).filter(matchesTarget);
 
     const merged = [...local, ...queued, ...sessions];
     const deduped = [];
@@ -634,8 +642,10 @@ app.get('/api/sessions', verifyToken, async (req, res) => {
     return res.json(cleaned);
   } catch (err) {
     console.warn('Sessions fetch (cloud) failed:', err.message || err);
-    const { userId, userRole } = await getRequestUserContext(req);
-    return res.json(loadLocalSessions().filter(session => sessionAccessibleByUser(session, userId, userRole)));
+    const ctx = await getRequestUserContext(req);
+    const targetUserIds = await resolveSessionTargetIds(req, ctx);
+    const targetSet = targetUserIds ? new Set(targetUserIds.map(normalizeSessionUserId)) : null;
+    return res.json(loadLocalSessions().filter(s => !targetSet || targetSet.has(normalizeSessionUserId(s.userId))));
   }
 });
 

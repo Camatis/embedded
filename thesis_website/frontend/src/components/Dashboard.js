@@ -39,9 +39,9 @@ function Dashboard({ user, token, onLogout }) {
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [editingName, setEditingName] = useState('');
 
-  // Admin: view any user's batches via a user-picker dropdown
+  // Admin: view any user's batches via a user-picker dropdown (keyed by username)
   const [adminUsers, setAdminUsers] = useState([]);
-  const [selectedAdminUserId, setSelectedAdminUserId] = useState('');
+  const [selectedAdminUser, setSelectedAdminUser] = useState('');
   const [adminUserSessions, setAdminUserSessions] = useState([]);
 
   const videoRef = useRef(null);
@@ -570,14 +570,15 @@ function Dashboard({ user, token, onLogout }) {
     }
   };
 
-  // Admin: fetch the batches belonging to the selected user
-  const fetchAdminUserSessions = async (targetUserId) => {
-    if (!targetUserId) {
+  // Admin: fetch the batches belonging to the selected user (by username, so all of
+  // their owner-id forms — cloud _id and offline-<username> — are matched).
+  const fetchAdminUserSessions = async (targetUsername) => {
+    if (!targetUsername) {
       setAdminUserSessions([]);
       return;
     }
     try {
-      const res = await fetch(`${BACKEND_URL}/api/sessions?userId=${encodeURIComponent(targetUserId)}`, {
+      const res = await fetch(`${BACKEND_URL}/api/sessions?username=${encodeURIComponent(targetUsername)}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -1201,17 +1202,17 @@ function Dashboard({ user, token, onLogout }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2>User Batches (Admin)</h2>
               <select
-                value={selectedAdminUserId}
-                onChange={e => { const id = e.target.value; setSelectedAdminUserId(id); fetchAdminUserSessions(id); }}
+                value={selectedAdminUser}
+                onChange={e => { const uname = e.target.value; setSelectedAdminUser(uname); fetchAdminUserSessions(uname); }}
                 style={{ padding: '10px 12px', borderRadius: '6px', minWidth: '220px', fontWeight: 600 }}
               >
                 <option value="">Select a user…</option>
                 {adminUsers.map(u => (
-                  <option key={u.userId} value={u.userId}>{u.username}</option>
+                  <option key={u.username} value={u.username}>{u.username}</option>
                 ))}
               </select>
             </div>
-            {!selectedAdminUserId ? (
+            {!selectedAdminUser ? (
               <p style={{ color: '#666' }}>Select a user from the dropdown to view their batches.</p>
             ) : (
               <div className="history-table-container">
