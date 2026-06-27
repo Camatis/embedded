@@ -439,10 +439,16 @@ const normalizeSessionUserId = (userId) => {
   return typeof userId === 'string' ? userId : userId.toString();
 };
 
-const sessionAccessibleByUser = (session, userId, userRole) => {
+const sessionAccessibleByUser = (session, userIdOrIds, userRole) => {
   if (userRole === 'admin') return true;
   if (!session?.userId) return false;
-  return normalizeSessionUserId(session.userId) === normalizeSessionUserId(userId);
+  const sid = normalizeSessionUserId(session.userId);
+  // Accept either a single id or an array of a user's id forms (_id + offline-<username>)
+  // so a batch is reachable regardless of which login path stored it.
+  if (Array.isArray(userIdOrIds)) {
+    return userIdOrIds.some(id => normalizeSessionUserId(id) === sid);
+  }
+  return sid === normalizeSessionUserId(userIdOrIds);
 };
 
 const getRequestUserContext = async (req) => {
@@ -500,6 +506,16 @@ const resolveSessionTargetIds = async (req, ctx) => {
   }
   const ids = await resolveUserIdsForUsername(username);
   if (userId && !ids.includes(userId)) ids.push(userId);
+  return ids;
+};
+
+// Id set used for per-session access checks (view/rename/delete). null for admins
+// (they pass the admin short-circuit); for normal users it's every id form of their
+// own account so their split historical batches are still writable.
+const resolveAccessIds = async (ctx) => {
+  if (ctx.userRole === 'admin') return null;
+  const ids = await resolveUserIdsForUsername(ctx.username);
+  if (ctx.userId && !ids.includes(ctx.userId)) ids.push(ctx.userId);
   return ids;
 };
 
@@ -752,8 +768,9 @@ app.get('/api/sessions/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Session not found' });
     }
 
-    const { userId, userRole } = await getRequestUserContext(req);
-    if (!sessionAccessibleByUser(session, userId, userRole)) {
+    const ctx = await getRequestUserContext(req);
+    const accessIds = await resolveAccessIds(ctx);
+    if (!sessionAccessibleByUser(session, accessIds ?? ctx.userId, ctx.userRole)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -796,12 +813,15 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
       updateData.session_name = req.body.session_name;
     }
 
-    const { userId, userRole } = await getRequestUserContext(req);
+    const ctx = await getRequestUserContext(req);
+    const { userRole } = ctx;
+    const accessIds = await resolveAccessIds(ctx);
+    const accessArg = accessIds ?? ctx.userId;
     let existingSession = null;
     if (isValidSessionObjectId(sessionId)) {
       existingSession = await Session.findById(sessionId);
     }
-    if (existingSession && !sessionAccessibleByUser(existingSession, userId, userRole)) {
+    if (existingSession && !sessionAccessibleByUser(existingSession, accessArg, userRole)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -838,7 +858,7 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
     const queueIndex = offlineQueue.findIndex(q => q._id === sessionId);
     if (queueIndex !== -1) {
       const queueSession = offlineQueue[queueIndex];
-      if (!sessionAccessibleByUser(queueSession, userId, userRole)) {
+      if (!sessionAccessibleByUser(queueSession, accessArg, userRole)) {
         return res.status(403).json({ message: 'Access denied' });
       }
       const merged = {
@@ -870,7 +890,7 @@ app.put('/api/sessions/:id', verifyToken, async (req, res) => {
         const raw = fs.readFileSync(filePath, 'utf8');
         const batch = JSON.parse(raw);
         if (batch._id === sessionId) {
-          if (!sessionAccessibleByUser(batch, userId, userRole)) {
+          if (!sessionAccessibleByUser(batch, accessArg, userRole)) {
             return res.status(403).json({ message: 'Access denied' });
           }
           // merge stale data and update
@@ -919,8 +939,9 @@ app.delete('/api/sessions/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Session not found' });
     }
 
-    const { userId, userRole } = await getRequestUserContext(req);
-    if (!sessionAccessibleByUser(session, userId, userRole)) {
+    const ctx = await getRequestUserContext(req);
+    const accessIds = await resolveAccessIds(ctx);
+    if (!sessionAccessibleByUser(session, accessIds ?? ctx.userId, ctx.userRole)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 

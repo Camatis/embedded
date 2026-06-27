@@ -808,9 +808,14 @@ function Dashboard({ user, token, onLogout }) {
         const updated = await res.json();
         setSessions(prev => prev.map(s => (s._id === id ? updated : s)));
         cancelEditing();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        console.error('Rename failed:', res.status, data);
+        alert(`Could not rename batch: ${data.message || res.statusText}`);
       }
     } catch (err) {
       console.error('Error updating session name', err);
+      alert('Could not rename batch: network error');
     }
   };
 
