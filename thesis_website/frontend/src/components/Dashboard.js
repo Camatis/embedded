@@ -350,83 +350,59 @@ function Dashboard({ user, token, onLogout }) {
         large: { ...prev.large, detecting: data.large }
       }));
 
-      if (!sessionActive || sessionPaused) {
-        if (data.defective) {
-          setDetectedSize('DEFECTIVE');
-          setIsDefective(true);
-          setIsDefectiveFlag(true);
-        } else {
-          setIsDefective(false);
-          setIsDefectiveFlag(false);
-        }
-        return;
-      }
-
+      // Display-only indicators (defective banner / detected-size label). These
+      // reflect the live camera decision and may stay on for several polls —
+      // they do NOT drive the counts.
       if (data.defective) {
         setIsDefective(true);
         setIsDefectiveFlag(true);
         setDetectedSize('DEFECTIVE');
-        setSortingStats(prev => {
-          const updated = { ...prev, defective: prev.defective + 1, total: prev.total + 1 };
-          countsRef.current = updated;  
-          checkLimits(updated);
-          return updated;
-        });
       } else {
         setIsDefective(false);
         setIsDefectiveFlag(false);
-
-        let sizeIndex = null;
         if (typeof data.detectedSize === 'string') {
           const mapped = data.detectedSize.trim().toUpperCase();
-          if (mapped === 'SMALL') sizeIndex = 1;
-          else if (mapped === 'MEDIUM') sizeIndex = 2;
-          else if (mapped === 'LARGE') sizeIndex = 3;
-        } else if (typeof data.detectedSize === 'number') {
-          sizeIndex = data.detectedSize;
+          setDetectedSize(['SMALL', 'MEDIUM', 'LARGE'].includes(mapped) ? mapped : 'NONE');
+        } else {
+          setDetectedSize('NONE');
         }
+      }
 
-        switch (sizeIndex) {
-          case 1:
-            setDetectedSize('SMALL');
-            setSortingStats(prev => {
-              const updated = { ...prev, small: prev.small + 1, total: prev.total + 1 };
-              countsRef.current = updated;
-              checkLimits(updated);
-              return updated;
-            });
-            break;
-          case 2:
-            setDetectedSize('MEDIUM');
-            setSortingStats(prev => {
-              const updated = { ...prev, medium: prev.medium + 1, total: prev.total + 1 };
-              countsRef.current = updated;
-              checkLimits(updated);
-              return updated;
-            });
-            break;
-          case 3:
-            setDetectedSize('LARGE');
-            setSortingStats(prev => {
-              const updated = { ...prev, large: prev.large + 1, total: prev.total + 1 };
-              countsRef.current = updated;
-              checkLimits(updated);
-              return updated;
-            });
-            break;
-          default:
-            setDetectedSize('NONE');
-        }
+      if (!sessionActive || sessionPaused) return;
 
-        if (sizeIndex >= 1 && sizeIndex <= 3) {
-          const timestamp = new Date().toLocaleTimeString();
-          setSortingHistory(prev => {
-            const newHistory = [...prev, {
-              timestamp,
-              size: sizeIndex === 1 ? 'SMALL' : sizeIndex === 2 ? 'MEDIUM' : 'LARGE'
-            }];
-            return newHistory.slice(-100);
-          });
+      // Counts: mirror servotest's authoritative counters. servotest increments
+      // each count exactly once per mango (gated by the IR trigger breakbeam),
+      // so the UI just displays its numbers. Previously the UI added +1 on every
+      // 500 ms poll while a flag stayed true, which made counts climb continuously.
+      const c = data.counts;
+      if (c && typeof c === 'object' && Object.keys(c).length > 0) {
+        const prev = countsRef.current;
+        const updated = {
+          small: c.small ?? prev.small,
+          medium: c.medium ?? prev.medium,
+          large: c.large ?? prev.large,
+          defective: c.defective ?? prev.defective,
+          total: c.total ?? prev.total
+        };
+        const changed =
+          updated.small !== prev.small ||
+          updated.medium !== prev.medium ||
+          updated.large !== prev.large ||
+          updated.defective !== prev.defective ||
+          updated.total !== prev.total;
+        if (changed) {
+          // Append history once per newly sorted size mango.
+          let addedSize = null;
+          if (updated.small > prev.small) addedSize = 'SMALL';
+          else if (updated.medium > prev.medium) addedSize = 'MEDIUM';
+          else if (updated.large > prev.large) addedSize = 'LARGE';
+          if (addedSize) {
+            const timestamp = new Date().toLocaleTimeString();
+            setSortingHistory(h => [...h, { timestamp, size: addedSize }].slice(-100));
+          }
+          countsRef.current = updated;
+          setSortingStats(updated);
+          checkLimits(updated);
         }
       }
     } catch (error) {
@@ -457,7 +433,8 @@ function Dashboard({ user, token, onLogout }) {
           medium: !!data.medium,
           large: !!data.large,
           defective: !!data.defective,
-          detectedSize: data.detectedSize
+          detectedSize: data.detectedSize,
+          counts: data.counts || {}
         };
 
         if (mounted) {
@@ -611,7 +588,9 @@ function Dashboard({ user, token, onLogout }) {
       });
       if (res.ok) {
         setSessions([]);
-        setSortingStats({ small: 0, medium: 0, large: 0, total: 0, defective: 0 });
+        const zeroCounts = { small: 0, medium: 0, large: 0, total: 0, defective: 0 };
+        setSortingStats(zeroCounts);
+        countsRef.current = zeroCounts;
         setCurrentSessionId(null);
         await fetchSessions();
       }
