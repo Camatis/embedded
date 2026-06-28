@@ -34,6 +34,8 @@ frame_is_new = False
 
 last_detections = []
 last_multi_detection = False
+multi_detection_hold_until = 0.0
+MULTI_DETECTION_HOLD = 2.0  # seconds to hold the multi flag after 2+ boxes seen (debounce flicker)
 
 detection_cache_lock = threading.Lock()
 
@@ -189,7 +191,7 @@ def background_capture():
 
 
 def background_detect():
-    global last_detections, last_multi_detection, frame_is_new
+    global last_detections, last_multi_detection, frame_is_new, multi_detection_hold_until
     print("✓ Background detection thread started")
 
     while True:
@@ -205,10 +207,20 @@ def background_detect():
                 continue
 
             detection_boxes = run_detection(frame)
+
+            # Latch multi-detection: once 2+ boxes are seen, hold the "multi" flag True
+            # for a short window (MULTI_DETECTION_HOLD) so a brief flicker — one of the
+            # two boxes momentarily dropping out — still counts as two mangoes for both
+            # the dashboard popup and the reverse logic.
+            now = time.time()
+            if len(detection_boxes) > 1:
+                multi_detection_hold_until = now + MULTI_DETECTION_HOLD
+            multi_latched = now < multi_detection_hold_until
+
             if not detection_boxes:
                 with detection_cache_lock:
                     last_detections = []
-                    last_multi_detection = False
+                    last_multi_detection = multi_latched
                 time.sleep(DETECTION_INTERVAL)
                 continue
 
@@ -221,7 +233,7 @@ def background_detect():
 
             with detection_cache_lock:
                 last_detections = detection_boxes
-                last_multi_detection = len(detection_boxes) > 1
+                last_multi_detection = multi_latched
 
             if mango_publisher is not None:
                 payload = {
@@ -230,7 +242,7 @@ def background_detect():
                         for x1, y1, x2, y2, conf, cls_name in detection_boxes
                     ],
                     'is_defective': is_defective,
-                    'multi_detection': len(detection_boxes) > 1,
+                    'multi_detection': multi_latched,
                     'timestamp': time.time()
                 }
                 try:

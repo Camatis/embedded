@@ -495,8 +495,9 @@ function Dashboard({ user, token, onLogout }) {
     };
   }, [sessionActive, sessionPaused]);
 
-  // Two-or-more-mangoes popup driven directly by the LIVE camera feed:
-  // show whenever 2+ bounding boxes are detected (detection_count >= 2).
+  // Two-or-more-mangoes popup driven by the camera's LATCHED multi-detection flag,
+  // the same signal servotest uses to reverse. The latch holds for ~2s after 2+ boxes
+  // are seen, so a brief detection flicker still shows the popup and triggers the reverse.
   useEffect(() => {
     let mounted = true;
     const pollDetectionCount = async () => {
@@ -505,8 +506,7 @@ function Dashboard({ user, token, onLogout }) {
         if (!res.ok) return;
         const data = await res.json();
         if (mounted) {
-          const count = typeof data.detection_count === 'number' ? data.detection_count : 0;
-          setShowTwoMangoesPopup(count >= 2);
+          setShowTwoMangoesPopup(data.multi_detection === true);
         }
       } catch (err) {
         // webrtc_stream may be starting up or unavailable — ignore
