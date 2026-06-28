@@ -126,7 +126,7 @@ def run_detection(frame):
     if yolo_model is None:
         return []
     try:
-        results = yolo_model(frame, verbose=False, conf=0.6, iou=0.45, imgsz=480)
+        results = yolo_model(frame, verbose=False, conf=0.5, iou=0.45, imgsz=480)
         detections = []
         if results and len(results) > 0:
             for box in results[0].boxes:
