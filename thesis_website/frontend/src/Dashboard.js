@@ -1028,7 +1028,7 @@ function Dashboard({ user, token, onLogout }) {
             <span />
             <span />
           </div>
-          <h1>MangoPain</h1>
+          <h1>MangPa-in</h1>
         </div>
       </header>
 
