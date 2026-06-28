@@ -433,6 +433,8 @@ def scan_for_mango_data():
 
 def autonomous_sorting_loop():
     global sorting_active, sorting_paused, batch_state, conveyor_state, count_small, count_medium, count_large, count_defective, count_total, last_mango, multi_detection_flag
+    last_multi_check = 0.0
+    MULTI_CHECK_INTERVAL = 0.3  # seconds between live two-mango camera polls
     while True:
         try:
             if not sorting_active:
@@ -446,6 +448,26 @@ def autonomous_sorting_loop():
 
             set_led("READY")
             set_conveyor_speed(CONVEYOR_SPEED)
+
+            # Live two-or-more-mango watch — same camera signal that shows the
+            # dashboard popup (2+ bounding boxes). Reverse to the entrance (same as
+            # the no-detection path) so the extra mango is pushed back for removal.
+            now = time.time()
+            if now - last_multi_check >= MULTI_CHECK_INTERVAL:
+                last_multi_check = now
+                if check_multi_detection():
+                    print('🚨 Two or more mangoes detected (live) → reversing to entrance.')
+                    with multi_detection_lock:
+                        multi_detection_flag = True
+                    set_hardware_alert('TWO_MANGOES')
+                    set_led("BUSY")
+                    reverse_until_entrance()
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    with multi_detection_lock:
+                        multi_detection_flag = False
+                    set_conveyor_speed(CONVEYOR_SPEED)
+                    continue
 
             if GPIO.input(IR_TRIGGER_PIN) == SENSOR_ACTIVE:
                 time.sleep(0.03)  # 30 ms debounce
