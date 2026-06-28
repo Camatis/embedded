@@ -492,6 +492,7 @@ def autonomous_sorting_loop():
                     continue
 
                 entrance_blocked_during_scan = threading.Event()
+                multi_during_scan = threading.Event()
                 scan_abort = threading.Event()
 
                 def _watch_entrance():
@@ -501,11 +502,36 @@ def autonomous_sorting_loop():
                             return
                         time.sleep(0.05)
 
+                def _watch_multi():
+                    while not scan_abort.is_set():
+                        if check_multi_detection():
+                            multi_during_scan.set()
+                            return
+                        time.sleep(0.2)
+
                 watcher = threading.Thread(target=_watch_entrance, daemon=True)
                 watcher.start()
+                watcher_multi = threading.Thread(target=_watch_multi, daemon=True)
+                watcher_multi.start()
 
                 is_defective, is_not_carabao, no_detection = scan_for_mango_data()
                 scan_abort.set()
+
+                # Two-or-more mangoes take priority over the scan result: reverse to the
+                # entrance instead of sorting, so two defective mangoes don't go to the
+                # defective route. Catches multi seen any time during the scan + a final check.
+                if multi_during_scan.is_set() or check_multi_detection():
+                    print('🚨 Two or more mangoes detected during scan → reversing to entrance.')
+                    with multi_detection_lock:
+                        multi_detection_flag = True
+                    set_hardware_alert('TWO_MANGOES')
+                    reverse_until_entrance()
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    with multi_detection_lock:
+                        multi_detection_flag = False
+                    set_conveyor_speed(CONVEYOR_SPEED)
+                    continue
 
                 if entrance_blocked_during_scan.is_set():
                     print('🚨 Object detected at entrance during scan!')
@@ -552,7 +578,35 @@ def autonomous_sorting_loop():
                 time.sleep(0.2)
                 set_conveyor_speed(0)
 
+                multi_during_scan2 = threading.Event()
+                scan_abort2 = threading.Event()
+
+                def _watch_multi2():
+                    while not scan_abort2.is_set():
+                        if check_multi_detection():
+                            multi_during_scan2.set()
+                            return
+                        time.sleep(0.2)
+
+                watcher_multi2 = threading.Thread(target=_watch_multi2, daemon=True)
+                watcher_multi2.start()
+
                 is_defective_2, _, no_detection_2 = scan_for_mango_data()
+                scan_abort2.set()
+
+                # Two-or-more mangoes take priority over the second-scan result too.
+                if multi_during_scan2.is_set() or check_multi_detection():
+                    print('🚨 Two or more mangoes detected during second scan → reversing to entrance.')
+                    with multi_detection_lock:
+                        multi_detection_flag = True
+                    set_hardware_alert('TWO_MANGOES')
+                    reverse_until_entrance()
+                    wait_for_entrance_clear()
+                    clear_hardware_alert()
+                    with multi_detection_lock:
+                        multi_detection_flag = False
+                    set_conveyor_speed(CONVEYOR_SPEED)
+                    continue
 
                 if is_defective_2:
                     print('🚨 DEFECTIVE on second side → defective route.')
