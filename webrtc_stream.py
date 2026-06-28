@@ -99,17 +99,27 @@ def init_camera():
 
 
 def get_color_and_status(cls_name):
-    cn = str(cls_name).strip().lower()
-    # 'not' guard prevents "not_defective" from matching as defective
-    is_defective = 'not' not in cn and any(k in cn for k in ['defect', 'bad', 'damaged', 'rotten'])
-    # 'not' guard prevents "not_carabao" substring from matching as carabao
-    is_carabao = 'carabao' in cn and 'not' not in cn
+    """Map the model's exact class name to (BGR color, is_defective, is_not_carabao).
 
-    if is_defective:
+    Model classes: 'Defective', 'Not Defective', 'Not Carabao Mango'. These three are
+    distinct categories, so match the exact names instead of guessing from substrings
+    (the old substring logic collapsed 'Not Defective' into the 'not carabao' bucket).
+    """
+    cn = str(cls_name).strip().lower()
+
+    if cn == 'defective':
         return (0, 0, 255), True, False    # Red (BGR) — defective
-    elif not is_carabao:
-        return (0, 255, 255), False, True  # Yellow (BGR) — not carabao mango
-    return (0, 255, 0), False, False       # Green (BGR) — not defective
+    if cn == 'not carabao mango':
+        return (0, 255, 255), False, True  # Yellow (BGR) — wrong variety (reject)
+    if cn == 'not defective':
+        return (0, 255, 0), False, False   # Green (BGR) — good carabao mango
+
+    # Fallback for any unexpected label
+    if 'carabao' in cn:
+        return (0, 255, 255), False, True
+    if 'not' not in cn and any(k in cn for k in ['defect', 'bad', 'damaged', 'rotten']):
+        return (0, 0, 255), True, False
+    return (0, 255, 0), False, False       # default: treat as good
 
 
 def run_detection(frame):
@@ -204,11 +214,10 @@ def background_detect():
 
             is_defective = False
             for _, _, _, _, _, cls_name in detection_boxes:
-                if cls_name:
-                    cn = str(cls_name).strip().lower()
-                    if 'not' not in cn and ('defect' in cn or 'bad' in cn or 'damaged' in cn or 'rotten' in cn):
-                        is_defective = True
-                        break
+                _, det_defective, _ = get_color_and_status(cls_name)
+                if det_defective:
+                    is_defective = True
+                    break
 
             with detection_cache_lock:
                 last_detections = detection_boxes

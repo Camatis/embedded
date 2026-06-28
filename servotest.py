@@ -386,6 +386,27 @@ def execute_large_delivery():
 # ==========================================
 # 5. MAIN AUTONOMOUS SENSOR LOOP
 # ==========================================
+def classify_mango_class(cls_name):
+    """Map a model class name to one of: 'defective', 'not_carabao', 'good'.
+
+    Model classes are exactly 'Defective', 'Not Defective', 'Not Carabao Mango'.
+    Match the exact names instead of guessing by substring (the old logic treated
+    'Not Defective' as 'not carabao' because that name lacks the word 'carabao').
+    """
+    cn = str(cls_name).strip().lower()
+    if cn == 'defective':
+        return 'defective'
+    if cn == 'not carabao mango':
+        return 'not_carabao'
+    if cn == 'not defective':
+        return 'good'
+    # Fallback for any unexpected label
+    if 'carabao' in cn:
+        return 'not_carabao'
+    if 'not' not in cn and any(k in cn for k in ['defect', 'bad', 'damaged', 'rotten']):
+        return 'defective'
+    return 'good'
+
 def scan_for_mango_data():
     """Wait for YOLO scan and return (is_defective, is_not_carabao, no_detection)."""
     time.sleep(4.0)
@@ -396,19 +417,11 @@ def scan_for_mango_data():
             dets = data.get('detections', [])
             if not dets:
                 return False, False, True
-            is_defective = any(
-                'not' not in str(d.get('class', '')).lower() and
-                any(k in str(d.get('class', '')).lower() for k in ['defect', 'bad', 'damaged', 'rotten'])
-                for d in dets
-            )
-            # Only flag not-carabao when mango is not defective; a defective mango
-            # routes to the defective bin regardless of variety.
-            # is_not_carabao = True when NO detection contains 'carabao' (excluding 'not_carabao' patterns)
-            is_not_carabao = not is_defective and not any(
-                'carabao' in str(d.get('class', '')).lower() and
-                'not' not in str(d.get('class', '')).lower()
-                for d in dets
-            )
+            cats = [classify_mango_class(d.get('class', '')) for d in dets]
+            # Priority: a defective mango goes to the defective bin regardless of variety;
+            # otherwise a non-carabao mango is rejected; otherwise it's a good mango.
+            is_defective = 'defective' in cats
+            is_not_carabao = (not is_defective) and ('not_carabao' in cats)
             return is_defective, is_not_carabao, False
     except Exception:
         pass
