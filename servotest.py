@@ -459,6 +459,7 @@ def autonomous_sorting_loop():
                     print('🚨 Two or more mangoes detected (live) → reversing to entrance.')
                     with multi_detection_lock:
                         multi_detection_flag = True
+                    trigger_buzzer()
                     set_hardware_alert('TWO_MANGOES')
                     set_led("BUSY")
                     reverse_until_entrance()
@@ -482,6 +483,7 @@ def autonomous_sorting_loop():
                     print('🚨 Multiple mangoes detected!')
                     with multi_detection_lock:
                         multi_detection_flag = True
+                    trigger_buzzer()
                     set_hardware_alert('TWO_MANGOES')
                     reverse_until_entrance()
                     wait_for_entrance_clear()
@@ -524,6 +526,7 @@ def autonomous_sorting_loop():
                     print('🚨 Two or more mangoes detected during scan → reversing to entrance.')
                     with multi_detection_lock:
                         multi_detection_flag = True
+                    trigger_buzzer()
                     set_hardware_alert('TWO_MANGOES')
                     reverse_until_entrance()
                     wait_for_entrance_clear()
@@ -599,6 +602,7 @@ def autonomous_sorting_loop():
                     print('🚨 Two or more mangoes detected during second scan → reversing to entrance.')
                     with multi_detection_lock:
                         multi_detection_flag = True
+                    trigger_buzzer()
                     set_hardware_alert('TWO_MANGOES')
                     reverse_until_entrance()
                     wait_for_entrance_clear()
