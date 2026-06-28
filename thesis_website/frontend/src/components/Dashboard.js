@@ -472,6 +472,11 @@ function Dashboard({ user, token, onLogout }) {
           if (alert && REJECTION_MESSAGES[alert]) {
             setRejectionMessage(REJECTION_MESSAGES[alert]);
             setShowRejectionPopup(true);
+          } else if (data.redLed && data.entranceBlocked) {
+            // Entrance-during-scan: a mango entered the entrance while the red
+            // (BUSY) LED is on — show the popup based on the live LED + entrance state.
+            setRejectionMessage(REJECTION_MESSAGES.ENTRANCE_DURING_SCAN);
+            setShowRejectionPopup(true);
           } else {
             setShowRejectionPopup(false);
           }

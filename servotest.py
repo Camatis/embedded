@@ -148,7 +148,11 @@ GPIO.setup(GREEN_LED, GPIO.OUT)
 GPIO.setup(RED_LED, GPIO.OUT)
 GPIO.setup(BUZZER, GPIO.OUT)
 
+current_led = "OFF"  # tracks LED state so the API can report when the red (BUSY) LED is on
+
 def set_led(status):
+    global current_led
+    current_led = status
     if status == "READY":
         GPIO.output(GREEN_LED, GPIO.HIGH); GPIO.output(RED_LED, GPIO.LOW)
     elif status == "BUSY":
@@ -606,7 +610,8 @@ def get_hardware_status():
         'last_mango': last_mango,
         'alertMessage': get_hardware_alert(),
         'twoMangoes': two_mangoes,
-        'entranceBlocked': GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE
+        'entranceBlocked': GPIO.input(IR_ENTRANCE_PIN) == SENSOR_ACTIVE,
+        'redLed': current_led == 'BUSY'
     })
 
 @app.route('/api/hardware/control', methods=['POST'])

@@ -1113,6 +1113,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
         const alertMessage = data.alertMessage || '';
         const twoMangoes = data.twoMangoes ?? false;
         const entranceBlocked = data.entranceBlocked ?? entrance;
+        const redLed = data.redLed ?? false;
 
         res.json({
             small: trigger,
@@ -1127,6 +1128,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
             alertMessage,
             twoMangoes,
             entranceBlocked,
+            redLed,
             timestamp: Date.now(),
             online: true,
             state: data.state || 'unknown',
@@ -1148,6 +1150,7 @@ app.get('/api/hardware/sensors', async (req, res) => {
         alertMessage: '',
         twoMangoes: false,
         entranceBlocked: false,
+        redLed: false,
         timestamp: Date.now(),
         online: false,
         offline: true,
