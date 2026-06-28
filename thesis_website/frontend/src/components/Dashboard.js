@@ -445,8 +445,8 @@ function Dashboard({ user, token, onLogout }) {
         if (mounted) {
           handleSensorData(normalized);
 
-          // Task 2: two mangoes — auto show/hide as hardware resolves it
-          setShowTwoMangoesPopup(!!data.twoMangoes);
+          // (Two-or-more-mangoes popup is now driven directly by the live camera
+          //  box count — see the dedicated /api/hardware/detection poll below.)
 
           // Tasks 3, 7, 8: rejection pop-ups driven by hardware alert state
           const REJECTION_MESSAGES = {
@@ -489,6 +489,31 @@ function Dashboard({ user, token, onLogout }) {
       clearInterval(intervalId);
     };
   }, [sessionActive, sessionPaused]);
+
+  // Two-or-more-mangoes popup driven directly by the LIVE camera feed:
+  // show whenever 2+ bounding boxes are detected (detection_count >= 2).
+  useEffect(() => {
+    let mounted = true;
+    const pollDetectionCount = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/hardware/detection`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (mounted) {
+          const count = typeof data.detection_count === 'number' ? data.detection_count : 0;
+          setShowTwoMangoesPopup(count >= 2);
+        }
+      } catch (err) {
+        // webrtc_stream may be starting up or unavailable — ignore
+      }
+    };
+    const id = setInterval(pollDetectionCount, 500);
+    pollDetectionCount();
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, []);
 
   // CPU temperature monitor (RPi thermal zone pooling)
   useEffect(() => {
